@@ -159,7 +159,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // --- API & BUTTON LOGIC ---
-    const API_ENDPOINT = 'https://memory-visualizer-backend.onrender.com/execute';
+    const API_ENDPOINT = 'https://memory-visualizer.onrender.com/execute';
 
     // 1. COMPILE BUTTON
     btnCompile.addEventListener('click', async () => {
