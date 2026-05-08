@@ -11,24 +11,6 @@
 
 </div>
 
----
-
-# 📸 Preview
-
-<div align="center">
-
-| Editor & Execution | Heap Visualization |
-|---|---|
-| ![Editor Screenshot](./assets/editor-preview.png) | ![Heap Screenshot](./assets/heap-preview.png) |
-
-| Stack Frames | Object References |
-|---|---|
-| ![Stack Screenshot](./assets/stack-preview.png) | ![Pointers Screenshot](./assets/pointers-preview.png) |
-
-</div>
-
----
-
 # ✨ Core Idea
 
 **Polyglot Memory Visualizer** transforms source code execution into an interactive visual experience.
@@ -211,27 +193,20 @@ C++ support interfaces with:
 polyglot-memory-visualizer/
 │
 ├── backend/
-│   ├── app/
-│   ├── runtimes/
-│   │   ├── python/
-│   │   ├── java/
-│   │   ├── javascript/
-│   │   └── cpp/
-│   ├── sandbox/
 │   ├── tracers/
 │   ├── Dockerfile
-│   └── requirements.txt
+│   ├── requirements.txt
+│   ├── venv/
+│   ├── model.py
+|   └── main.py
+|
 │
 ├── frontend/
-│   ├── src/
-│   ├── assets/
-│   ├── styles/
-│   ├── public/
-│   └── package.json
-│
-├── docker-compose.yml
+│   ├── style.css
+│   ├── app.js
+│   └── index.html
 ├── README.md
-└── LICENSE
+
 ```
 
 ---
@@ -296,6 +271,5 @@ The platform includes:
 
 ## **Ankit Mor**
 
-Developer, systems enthusiast, and builder of runtime visualization tools.
 
 > *"Understanding memory is the key to understanding software."*
