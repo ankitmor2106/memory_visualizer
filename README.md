@@ -3,19 +3,9 @@
 <div align="center">
 
 <!-- Replace with your banner image -->
-<img src="./assets/banner.png" alt="Polyglot Memory Visualizer Banner" width="100%" />
 
-<br/><br/>
 
-![Python](https://img.shields.io/badge/Python-3.11-blue?style=for-the-badge&logo=python)
-![Java](https://img.shields.io/badge/Java-JDI%20%7C%20JDWP-orange?style=for-the-badge&logo=openjdk)
-![JavaScript](https://img.shields.io/badge/JavaScript-V8%20Inspector-yellow?style=for-the-badge&logo=javascript)
-![C++](https://img.shields.io/badge/C++-GDB%20MI-blue?style=for-the-badge&logo=cplusplus)
-![FastAPI](https://img.shields.io/badge/FastAPI-Backend-009688?style=for-the-badge&logo=fastapi)
-![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker)
-![Render](https://img.shields.io/badge/Deploy-Render-46E3B7?style=for-the-badge&logo=render)
-
-### **A next-generation execution tracing platform for visualizing Call Stack & Heap Memory across multiple programming languages.**
+### **A  execution tracing platform for visualizing Call Stack & Heap Memory across multiple programming languages.**
 
 *Built for learners, educators, and systems programmers who want to see memory evolve in real time.*
 
