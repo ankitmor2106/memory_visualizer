@@ -25,17 +25,18 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
+app = FastAPI(
+    title="Polyglot Memory Visualizer API",
+    version="1.0.0",
+    docs_url="/docs",
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
-)
-app = FastAPI(
-    title="Polyglot Memory Visualizer API",
-    version="1.0.0",
-    docs_url="/docs",
 )
 
 
