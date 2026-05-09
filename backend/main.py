@@ -26,7 +26,7 @@ from tracers.javascript_tracer import run_javascript
 from tracers.cpp_tracer import run_cpp
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-GLOBAL_TIMEOUT          = 30          # seconds
+GLOBAL_TIMEOUT          = 45          # seconds
 MAX_STEPS               = 500         # hard step cap
 MAX_PAYLOAD_BYTES       = 5_242_880   # 5 MiB
 PAYLOAD_TRUNCATED_STEPS = 100         # fallback step count when payload is huge
