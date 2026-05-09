@@ -1,182 +1,379 @@
-"""
-tracers/javascript_tracer.py
-
-Executes JavaScript via Node.js using the V8 Inspector Protocol (Chrome DevTools Protocol - CDP).
-"""
-
 import asyncio
 import json
 import re
 import tempfile
-import traceback
 from pathlib import Path
 from typing import Any
+
 import websockets
 
-from models import ExecuteResponse, StepModel, HeapObject, ErrorLocation
+from models import ExecuteResponse, StepModel, HeapObject
 
 MAX_STEPS = 500
 
+
 async def run_javascript(code: str) -> ExecuteResponse:
     with tempfile.TemporaryDirectory(prefix="js_trace_") as tmpdir:
-        tmp = Path(tmpdir)
-        src_file = tmp / "main.js"
-        src_file.write_text(code)
 
-        # Launch node paused on the first line
+        src_file = Path(tmpdir) / "main.js"
+        src_file.write_text(code, encoding="utf-8")
+
         proc = await asyncio.create_subprocess_exec(
-            "node", f"--inspect-brk=0", str(src_file),
+            "node",
+            "--inspect-brk=0",
+            str(src_file),
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
         )
 
+        # ── Get websocket inspector URL ──────────────────────────────
         ws_url = None
-        stderr_lines = []
-        
-        # Read stderr to find the WebSocket URL
+
         assert proc.stderr is not None
-        while True:
-            line = await proc.stderr.readline()
-            if not line:
-                break
-            line_str = line.decode('utf-8')
-            stderr_lines.append(line_str)
-            match = re.search(r"ws://127\.0\.0\.1:\d+/[0-9a-f-]+", line_str)
-            if match:
-                ws_url = match.group(0)
+
+        async for raw in proc.stderr:
+            text = raw.decode(errors="replace")
+
+            m = re.search(r"ws://127\.0\.0\.1:\d+/[0-9a-f\-]+", text)
+
+            if m:
+                ws_url = m.group(0)
                 break
 
         if not ws_url:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
             return ExecuteResponse(
                 success=False,
-                message="Syntax Error or failed to start Node.js debugger",
-                runtimeError="".join(stderr_lines),
+                message="Failed to start Node inspector",
+                runtimeError="No websocket URL found",
                 totalSteps=0,
-                steps=[]
+                steps=[],
             )
 
         steps: list[StepModel] = []
-        runtime_error = None
-        stdout_buf = []
+        runtime_error: str | None = None
+        stdout_lines: list[str] = []
+
+        # ── Read actual Node stdout directly ─────────────────────────
+        async def read_stdout():
+            assert proc.stdout is not None
+
+            async for raw in proc.stdout:
+                stdout_lines.append(
+                    raw.decode(errors="replace")
+                )
+
+        stdout_task = asyncio.create_task(read_stdout())
 
         try:
-            async with websockets.connect(ws_url, ping_timeout=None) as ws:
-                msg_id = 1
-                
-                async def send(method: str, params: dict = None):
-                    nonlocal msg_id
-                    req = {"id": msg_id, "method": method, "params": params or {}}
-                    await ws.send(json.dumps(req))
-                    msg_id += 1
-                    return req["id"]
+            async with websockets.connect(
+                ws_url,
+                ping_timeout=None,
+            ) as ws:
 
+                response_futures = {}
+                event_queue = asyncio.Queue()
+
+                # ── Message pump ─────────────────────────────────────
+                async def pump():
+                    try:
+                        async for raw in ws:
+                            msg = json.loads(raw)
+
+                            if "id" in msg:
+                                fut = response_futures.pop(
+                                    msg["id"],
+                                    None,
+                                )
+
+                                if fut and not fut.done():
+                                    fut.set_result(msg)
+
+                            elif "method" in msg:
+                                await event_queue.put(msg)
+
+                    except Exception:
+                        pass
+
+                pump_task = asyncio.create_task(pump())
+
+                msg_id = [1]
+
+                async def send(method, params=None):
+
+                    mid = msg_id[0]
+                    msg_id[0] += 1
+
+                    fut = asyncio.get_event_loop().create_future()
+
+                    response_futures[mid] = fut
+
+                    await ws.send(json.dumps({
+                        "id": mid,
+                        "method": method,
+                        "params": params or {},
+                    }))
+
+                    return await asyncio.wait_for(
+                        fut,
+                        timeout=5,
+                    )
+
+                # ── Enable runtime/debugger ──────────────────────────
                 await send("Runtime.enable")
                 await send("Debugger.enable")
                 await send("Runtime.runIfWaitingForDebugger")
 
                 step_count = 0
-                
+
                 while True:
+
                     try:
-                        msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.0))
+                        event = await asyncio.wait_for(
+                            event_queue.get(),
+                            timeout=4,
+                        )
                     except asyncio.TimeoutError:
                         break
 
-                    # Capture console.log
-                    if msg.get("method") == "Runtime.consoleAPICalled":
-                        args = msg["params"]["args"]
-                        texts = [a.get("value", a.get("description", "")) for a in args]
-                        stdout_buf.append(" ".join(str(t) for t in texts))
+                    method = event.get("method", "")
+                    params = event.get("params", {})
 
-                    # Process stopped at a breakpoint / step
-                    elif msg.get("method") == "Debugger.paused":
-                        step_count += 1
-                        if step_count > MAX_STEPS:
-                            runtime_error = "ExecutionLimitExceeded: Possible infinite loop."
-                            break
+                    # ── Runtime exception ────────────────────────────
+                    if method == "Runtime.exceptionThrown":
 
-                        frames = msg["params"]["callFrames"]
-                        if not frames:
-                            await send("Debugger.stepInto")
-                            continue
+                        detail = params.get(
+                            "exceptionDetails",
+                            {},
+                        )
 
-                        top_frame = frames[0]
-                        line_num = top_frame["location"]["lineNumber"] + 1
-                        func_name = top_frame["functionName"] or "main"
+                        runtime_error = (
+                            detail.get(
+                                "exception",
+                                {},
+                            ).get("description")
+                            or detail.get(
+                                "text",
+                                "Unknown JS error",
+                            )
+                        )
 
-                        stack_snap = {}
-                        heap: dict[str, HeapObject] = {}
+                        break
 
-                        # Simplified scope extraction (Locals only for speed)
-                        scope_chain = top_frame.get("scopeChain", [])
-                        locals_scope = next((s for s in scope_chain if s["type"] == "local"), None)
-                        
-                        if locals_scope:
-                            obj_id = locals_scope["object"]["objectId"]
-                            await send("Runtime.getProperties", {"objectId": obj_id, "ownProperties": True})
-                            
-                            # Wait for properties response
-                            prop_msg = json.loads(await ws.recv())
-                            while prop_msg.get("id") != msg_id - 1:
-                                prop_msg = json.loads(await ws.recv())
+                    # Ignore non-pause events
+                    if method != "Debugger.paused":
+                        continue
 
-                            locals_dict = {}
-                            for prop in prop_msg.get("result", {}).get("result", []):
-                                name = prop["name"]
-                                val_obj = prop.get("value", {})
-                                v_type = val_obj.get("type", "undefined")
-                                
-                                if v_type in ["number", "string", "boolean", "undefined"]:
-                                    locals_dict[name] = str(val_obj.get("value", v_type))
-                                elif v_type == "object":
-                                    subtype = val_obj.get("subtype", "object")
-                                    if subtype == "null":
-                                        locals_dict[name] = "null"
-                                    else:
-                                        target_id = f"obj_{val_obj.get('objectId', 'unknown')}"
-                                        locals_dict[name] = f"ref: {target_id}"
-                                        # Basic heap representation
-                                        heap[target_id] = HeapObject(
-                                            type=subtype.capitalize(),
-                                            value=val_obj.get("description", "Object")
+                    frames = params.get("callFrames", [])
+
+                    if not frames:
+                        await send("Debugger.stepOver")
+                        continue
+
+                    top = frames[0]
+
+                    url = top.get("url", "")
+
+                    # ── Skip Node/V8 internal files ─────────────────
+                    if (
+                        url.startswith("node:")
+                        or "internal/" in url
+                        or "bootstrap" in url
+                    ):
+                        await send("Debugger.stepOver")
+                        continue
+
+                    step_count += 1
+
+                    if step_count > MAX_STEPS:
+                        runtime_error = (
+                            "ExecutionLimitExceeded: "
+                            "Possible infinite loop."
+                        )
+                        break
+
+                    line_num = (
+                        top.get(
+                            "location",
+                            {},
+                        ).get(
+                            "lineNumber",
+                            0,
+                        ) + 1
+                    )
+
+                    func_name = (
+                        top.get("functionName")
+                        or "<anonymous>"
+                    )
+
+                    locals_dict: dict[str, Any] = {}
+                    heap: dict[str, HeapObject] = {}
+
+                    # ── Extract locals ──────────────────────────────
+                    scope_chain = top.get(
+                        "scopeChain",
+                        [],
+                    )
+
+                    local_scope = next(
+                        (
+                            s for s in scope_chain
+                            if s["type"] == "local"
+                        ),
+                        None,
+                    )
+
+                    if local_scope:
+
+                        obj_id = local_scope[
+                            "object"
+                        ].get("objectId")
+
+                        if obj_id:
+
+                            try:
+                                resp = await send(
+                                    "Runtime.getProperties",
+                                    {
+                                        "objectId": obj_id,
+                                        "ownProperties": True,
+                                    },
+                                )
+
+                                props = (
+                                    resp.get(
+                                        "result",
+                                        {},
+                                    ).get(
+                                        "result",
+                                        [],
+                                    )
+                                )
+
+                                for prop in props:
+
+                                    pname = prop["name"]
+
+                                    val_obj = prop.get(
+                                        "value",
+                                        {},
+                                    )
+
+                                    vtype = val_obj.get(
+                                        "type",
+                                        "undefined",
+                                    )
+
+                                    if vtype in (
+                                        "number",
+                                        "string",
+                                        "boolean",
+                                        "undefined",
+                                        "bigint",
+                                    ):
+
+                                        locals_dict[pname] = str(
+                                            val_obj.get(
+                                                "value",
+                                                vtype,
+                                            )
                                         )
-                            stack_snap[func_name] = locals_dict
 
-                        steps.append(StepModel(
-                            step=step_count,
-                            currentLine=line_num,
-                            stdout="\n".join(stdout_buf),
-                            stack=stack_snap,
-                            heap=heap
-                        ))
+                                    elif vtype == "object":
 
-                        await send("Debugger.stepInto")
+                                        subtype = val_obj.get(
+                                            "subtype",
+                                            "object",
+                                        )
 
-                    elif msg.get("method") == "Runtime.exceptionThrown":
-                        details = msg["params"]["exceptionDetails"]
-                        runtime_error = details.get("exception", {}).get("description", "Unknown error")
-                        break
-                    
-                    elif msg.get("method") == "Inspector.detached":
-                        break
+                                        if subtype == "null":
+                                            locals_dict[pname] = "null"
 
-        except Exception as e:
-            runtime_error = f"Tracer Error: {str(e)}"
-        
+                                        else:
+
+                                            oid = (
+                                                "obj_"
+                                                + val_obj.get(
+                                                    "objectId",
+                                                    "?",
+                                                )
+                                            )
+
+                                            locals_dict[pname] = (
+                                                f"ref: {oid}"
+                                            )
+
+                                            heap[oid] = HeapObject(
+                                                type=val_obj.get(
+                                                    "className",
+                                                    subtype,
+                                                ),
+                                                value=val_obj.get(
+                                                    "description",
+                                                    "",
+                                                ),
+                                            )
+
+                                    elif vtype == "function":
+                                        locals_dict[pname] = "ƒ()"
+
+                            except Exception:
+                                pass
+
+                    # ── Snapshot ────────────────────────────────────
+                    steps.append(StepModel(
+                        step=step_count,
+                        currentLine=line_num,
+                        stdout="".join(stdout_lines),
+                        stack={
+                            func_name: locals_dict
+                        },
+                        heap=heap,
+                    ))
+
+                    # IMPORTANT:
+                    # stepOver avoids entering Node internals
+                    await send("Debugger.stepOver")
+
+                # ── Final stdout patch ─────────────────────────────
+                await asyncio.sleep(0.2)
+
+                if steps:
+
+                    last = steps[-1]
+
+                    steps[-1] = StepModel(
+                        step=last.step,
+                        currentLine=last.currentLine,
+                        stdout="".join(stdout_lines),
+                        stack=last.stack,
+                        heap=last.heap,
+                    )
+
+                pump_task.cancel()
+
+        except Exception as exc:
+            runtime_error = str(exc)
+
         finally:
+
+            stdout_task.cancel()
+
             try:
                 proc.kill()
-            except ProcessLookupError:
+            except Exception:
                 pass
+
+            await proc.wait()
 
         return ExecuteResponse(
             success=runtime_error is None,
-            message="OK" if runtime_error is None else "Runtime Error",
+            message=(
+                "OK"
+                if runtime_error is None
+                else "Runtime error"
+            ),
             runtimeError=runtime_error,
             totalSteps=len(steps),
-            steps=steps
+            steps=steps,
         )

@@ -1,8 +1,12 @@
+"""
+models.py — Pydantic data contracts for the Polyglot Memory Visualizer API.
+"""
 from typing import Any, Optional
 from pydantic import BaseModel, field_validator
 
 SUPPORTED_LANGUAGES = {"python", "java", "javascript", "cpp"}
 MAX_CODE_LENGTH = 50_000
+
 
 class ExecuteRequest(BaseModel):
     code: str
@@ -26,14 +30,17 @@ class ExecuteRequest(BaseModel):
             raise ValueError(f"code exceeds {MAX_CODE_LENGTH} characters")
         return v
 
+
 class ErrorLocation(BaseModel):
     line: int
     message: str
+
 
 class HeapObject(BaseModel):
     type: str
     value: str = ""
     fields: dict[str, Any] = {}
+
 
 class StepModel(BaseModel):
     step: int
@@ -42,10 +49,11 @@ class StepModel(BaseModel):
     stack: dict[str, dict[str, Any]]
     heap: dict[str, HeapObject]
 
+
 class ExecuteResponse(BaseModel):
     success: bool
     message: str
     errors: list[ErrorLocation] = []
-    runtimeError: Optional[str] = None  # Fixed for Python 3.9 compatibility
+    runtimeError: Optional[str] = None
     totalSteps: int
     steps: list[StepModel]
