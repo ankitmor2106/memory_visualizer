@@ -89,7 +89,7 @@ _JAVAC_ERROR_RE = re.compile(r"^.+?:(\d+):\s+error:\s+(.+)$", re.MULTILINE)
 #   "Listening for transport dt_socket at address: 127.0.0.1:54321" (JDK 9-17)
 _JDWP_PORT_RE = re.compile(r"address:\s+(?:[\w.]+:)?(\d+)")
 
-JDWP_STDOUT_TIMEOUT = 15  # seconds to wait for the JDWP port line
+JDWP_STDOUT_TIMEOUT = 30 # seconds to wait for the JDWP port line
 
 
 def _parse_javac_errors(stderr: str) -> list[ErrorLocation]:
@@ -102,26 +102,31 @@ def _parse_javac_errors(stderr: str) -> list[ErrorLocation]:
 
 # ── Stdout reader: port detection + user output capture ───────────────────────
 
-async def _read_jvm_stdout(
-    stream: asyncio.StreamReader,
+# Replace the existing _read_jvm_stdout function and the stdout_task block
+
+async def _read_jvm_output(
+    stdout: asyncio.StreamReader,
+    stderr: asyncio.StreamReader,
     port_found: "asyncio.Future[int]",
     stdout_lines: list[str],
 ) -> None:
-    """
-    Read JVM stdout line-by-line serving two purposes:
-      - Before port is found: scan for the JDWP address line.
-      - After port is found: accumulate lines as user program output.
-    The JDWP line itself is NOT added to stdout_lines.
-    """
-    async for raw in stream:
-        line = raw.decode("utf-8", errors="replace")
-        if not port_found.done():
-            m = _JDWP_PORT_RE.search(line)
-            if m:
-                port_found.set_result(int(m.group(1)))
-            # pre-port JVM warnings / header lines are dropped
-        else:
-            stdout_lines.append(line)
+    """Read both stdout and stderr; extract JDWP port from whichever has it."""
+
+    async def read_stream(stream, is_stderr):
+        async for raw in stream:
+            line = raw.decode("utf-8", errors="replace")
+            if not port_found.done():
+                m = _JDWP_PORT_RE.search(line)
+                if m:
+                    port_found.set_result(int(m.group(1)))
+                    continue          # don't add the JDWP line to stdout
+            if not is_stderr:         # only accumulate real stdout
+                stdout_lines.append(line)
+
+    await asyncio.gather(
+        read_stream(stdout, False),
+        read_stream(stderr, True),
+    )
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
@@ -188,7 +193,7 @@ async def run_java(code: str) -> ExecuteResponse:
         port_found: asyncio.Future[int] = asyncio.get_event_loop().create_future()
 
         stdout_task = asyncio.create_task(
-            _read_jvm_stdout(jvm_proc.stdout, port_found, stdout_lines)
+        _read_jvm_output(jvm_proc.stdout, jvm_proc.stderr, port_found, stdout_lines)
         )
 
         try:
@@ -259,16 +264,7 @@ async def run_java(code: str) -> ExecuteResponse:
                 heap=heap,
             ))
 
-        # Surface agent crash details when trace is empty
-        agent_stderr = b""
-        if not steps and not runtime_error:
-            try:
-                assert agent_proc.stderr is not None
-                agent_stderr = await asyncio.wait_for(
-                    agent_proc.stderr.read(), timeout=2.0
-                )
-            except asyncio.TimeoutError:
-                pass
+
 
         # ── Cleanup ───────────────────────────────────────────────────────────
         stdout_task.cancel()
