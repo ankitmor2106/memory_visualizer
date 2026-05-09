@@ -275,7 +275,7 @@ elBtnCompile.addEventListener('click', async () => {
 
     try {
         const ctrl = new AbortController();
-        const timeoutId = setTimeout(() => ctrl.abort(), 60_000);
+        const timeoutId = setTimeout(() => ctrl.abort(), 180_000);
 
         const response = await fetch(API_ENDPOINT, {
             method: 'POST',
