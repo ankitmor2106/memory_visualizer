@@ -25,7 +25,7 @@ function escapeHTML(str) {
 /* ═══════════════════════════════════════════════════════════════
    1. CONSTANTS & CONFIG
    ═══════════════════════════════════════════════════════════════ */
-const API_ENDPOINT = 'https://memory-visualizer.onrender.com';
+const API_ENDPOINT = 'https://memory-visualizer.onrender.com/execute';
 const HEALTH_URL     = 'https://memory-visualizer.onrender.com/health';
 const GLOBAL_TIMEOUT = 30_000;       // ms — matches backend
 const HEALTH_PING_MS = 5 * 60_000;  // 5 minutes
