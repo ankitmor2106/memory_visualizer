@@ -55,6 +55,10 @@ app.add_middleware(
 async def health() -> dict[str, str]:
     return {"status": "ok"}
 
+@app.get("/")
+async def root() -> dict[str, str]:
+    return {"status": "ok", "service": "Memory Visualizer API"}
+
 
 # ── Main execute endpoint ─────────────────────────────────────────────────────
 @app.post("/execute", response_model=ExecuteResponse)
