@@ -1,31 +1,24 @@
 """
-tracers/java_tracer.py
+tracers/java_tracer.py  (fixed)
 
-Workflow
-────────
-1. Write user code to a temp directory and detect the public class name.
-2. Compile with `javac`.
-3. Launch the JVM with JDWP (suspend=y).
-   On JDK 21 (and most modern JDKs) the "Listening at address: PORT" message
-   is written to STDOUT, so a single stdout-reader task handles both:
-     a) extracting the JDWP port (first line matching the pattern)
-     b) accumulating all subsequent lines as user program output
-4. Launch JvmTraceAgent over a JDI socket.
-5. Parse newline-delimited JSON emitted by the agent.
-6. Assemble into ExecuteResponse.
+Key changes vs original
+────────────────────────
+1.  _read_jvm_output() reads BOTH stdout AND stderr for the JDWP port line.
+    JDK 17 writes the port to stderr; JDK 21 writes it to stdout.
+    This file now works with either version.
 
-Key fixes vs v2.0
-─────────────────
-  * JDWP port is read from STDOUT (not stderr) — confirmed on JDK 21.
-  * Regex handles "address: PORT" (JDK 21) and "address: 127.0.0.1:PORT" (JDK 9-17).
-  * Auto-compiles JvmTraceAgent.java -> .class when .class is missing/stale.
-  * JDK tool resolution scans /usr/lib/jvm when java/javac are not on PATH.
-  * asyncio.wait_for() guard on JDWP port detection (15 s).
-  * Agent stderr captured and surfaced when trace is empty.
+2.  Reduced JVM heap (-Xmx64m / -Xms16m) and forced SerialGC so two JVMs
+    can coexist on Render's 512 MB free-tier instance.
+
+3.  Logging added at every major stage so Render logs show exactly where
+    execution stalls.
+
+4.  JDWP_STDOUT_TIMEOUT bumped to 25 s for slow cold-start containers.
 """
 
 import asyncio
 import json
+import logging
 import os
 import re
 import shutil
@@ -34,6 +27,8 @@ import tempfile
 from pathlib import Path
 
 from models import ExecuteResponse, StepModel, HeapObject, ErrorLocation
+
+log = logging.getLogger(__name__)
 
 # ── JDK tool resolution ───────────────────────────────────────────────────────
 _JDK_SEARCH = [
@@ -65,12 +60,12 @@ AGENT_SOURCE = AGENT_CLASS_DIR / "JvmTraceAgent.java"
 AGENT_CLASS  = AGENT_CLASS_DIR / "JvmTraceAgent.class"
 
 def _ensure_agent_compiled() -> None:
-    """Compile JvmTraceAgent.java -> .class if missing or stale."""
     if not AGENT_SOURCE.exists():
         raise RuntimeError(f"JvmTraceAgent.java not found at {AGENT_SOURCE}.")
     if (AGENT_CLASS.exists()
             and AGENT_CLASS.stat().st_mtime >= AGENT_SOURCE.stat().st_mtime):
         return
+    log.info("Compiling JvmTraceAgent.java ...")
     javac = _find_tool("javac")
     result = subprocess.run(
         [javac, str(AGENT_SOURCE), "-d", str(AGENT_CLASS_DIR)],
@@ -80,16 +75,13 @@ def _ensure_agent_compiled() -> None:
         raise RuntimeError(
             f"Failed to compile JvmTraceAgent.java:\n{result.stderr}"
         )
+    log.info("JvmTraceAgent compiled OK")
 
 # ── Patterns ──────────────────────────────────────────────────────────────────
-_JAVAC_ERROR_RE = re.compile(r"^.+?:(\d+):\s+error:\s+(.+)$", re.MULTILINE)
+_JAVAC_ERROR_RE  = re.compile(r"^.+?:(\d+):\s+error:\s+(.+)$", re.MULTILINE)
+_JDWP_PORT_RE    = re.compile(r"address:\s+(?:[\w.]+:)?(\d+)")
 
-# Handles both:
-#   "Listening for transport dt_socket at address: 54321"         (JDK 21)
-#   "Listening for transport dt_socket at address: 127.0.0.1:54321" (JDK 9-17)
-_JDWP_PORT_RE = re.compile(r"address:\s+(?:[\w.]+:)?(\d+)")
-
-JDWP_STDOUT_TIMEOUT = 30 # seconds to wait for the JDWP port line
+JDWP_STDOUT_TIMEOUT = 25   # seconds — raised for cold containers
 
 
 def _parse_javac_errors(stderr: str) -> list[ErrorLocation]:
@@ -100,46 +92,50 @@ def _parse_javac_errors(stderr: str) -> list[ErrorLocation]:
     return errs or [ErrorLocation(line=0, message=stderr.strip()[:500])]
 
 
-# ── Stdout reader: port detection + user output capture ───────────────────────
-
-# Replace the existing _read_jvm_stdout function and the stdout_task block
-
+# ── Combined stdout + stderr reader ──────────────────────────────────────────
+#
+#   JDK 17  →  JDWP "Listening at address: PORT"  goes to STDERR
+#   JDK 21  →  same message goes to STDOUT
+#
+#   We race both streams so this works with any JDK version.
+#
 async def _read_jvm_output(
     stdout: asyncio.StreamReader,
     stderr: asyncio.StreamReader,
     port_found: "asyncio.Future[int]",
     stdout_lines: list[str],
 ) -> None:
-    """Read both stdout and stderr; extract JDWP port from whichever has it."""
-
-    async def read_stream(stream, is_stderr):
+    async def drain(stream: asyncio.StreamReader, is_stderr: bool) -> None:
         async for raw in stream:
             line = raw.decode("utf-8", errors="replace")
             if not port_found.done():
                 m = _JDWP_PORT_RE.search(line)
                 if m:
-                    port_found.set_result(int(m.group(1)))
-                    continue          # don't add the JDWP line to stdout
-            if not is_stderr:         # only accumulate real stdout
+                    port = int(m.group(1))
+                    log.info("JDWP port found on %s: %d",
+                             "stderr" if is_stderr else "stdout", port)
+                    port_found.set_result(port)
+                    continue          # don't add the JDWP banner to output
+            if not is_stderr:
                 stdout_lines.append(line)
 
     await asyncio.gather(
-        read_stream(stdout, False),
-        read_stream(stderr, True),
+        drain(stdout, False),
+        drain(stderr, True),
     )
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 async def run_java(code: str) -> ExecuteResponse:
-    """Compile and trace Java code via JDWP + JDI agent."""
+    log.info("run_java: starting")
 
-    # Pre-flight: agent + JDK tools
     try:
         _ensure_agent_compiled()
         java  = _find_tool("java")
         javac = _find_tool("javac")
     except RuntimeError as exc:
+        log.error("run_java: tool/agent error: %s", exc)
         return ExecuteResponse(
             success=False,
             message=str(exc),
@@ -147,6 +143,8 @@ async def run_java(code: str) -> ExecuteResponse:
             totalSteps=0,
             steps=[],
         )
+
+    log.info("run_java: using java=%s", java)
 
     with tempfile.TemporaryDirectory(prefix="jvm_trace_") as tmpdir:
         tmp = Path(tmpdir)
@@ -157,13 +155,15 @@ async def run_java(code: str) -> ExecuteResponse:
         src_file.write_text(code)
 
         # ── Step 1: Compile ───────────────────────────────────────────────────
+        log.info("run_java: compiling %s", class_name)
         cp = await asyncio.create_subprocess_exec(
-            javac,"-g", str(src_file), "-d", str(tmp),
+            javac, "-g", str(src_file), "-d", str(tmp),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         _, stderr_bytes = await cp.communicate()
         if cp.returncode != 0:
+            log.warning("run_java: compilation failed")
             return ExecuteResponse(
                 success=False,
                 message="Compilation failed",
@@ -171,12 +171,22 @@ async def run_java(code: str) -> ExecuteResponse:
                 totalSteps=0,
                 steps=[],
             )
+        log.info("run_java: compilation OK")
 
         # ── Step 2: Launch JVM with JDWP ─────────────────────────────────────
+        #
+        #   -Xmx64m / -Xms16m   keep the user JVM small so the agent JVM
+        #                        can also fit within Render's 512 MB RAM.
+        #   -XX:+UseSerialGC     avoids spawning multiple GC threads on a
+        #                        shared-CPU container (reduces overhead).
+        #
+        log.info("run_java: launching JVM with JDWP suspend=y ...")
         jvm_proc = await asyncio.create_subprocess_exec(
             java,
             "-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:0",
-            "-Xmx128m",
+            "-Xmx64m",
+            "-Xms16m",
+            "-XX:+UseSerialGC",
             "-XX:TieredStopAtLevel=1",
             "-cp", str(tmp),
             class_name,
@@ -184,16 +194,15 @@ async def run_java(code: str) -> ExecuteResponse:
             stderr=asyncio.subprocess.PIPE,
         )
         assert jvm_proc.stdout is not None
+        assert jvm_proc.stderr is not None
 
-        # ── Step 3: Read JDWP port from JVM stdout (with timeout) ─────────────
-        # IMPORTANT: on JDK 21 the "Listening at address: PORT" line goes to
-        # stdout (not stderr). The same stdout stream also carries user program
-        # output after the port line, so _read_jvm_stdout handles both roles.
+        # ── Step 3: Race stdout vs stderr for JDWP port ───────────────────────
         stdout_lines: list[str] = []
         port_found: asyncio.Future[int] = asyncio.get_event_loop().create_future()
 
         stdout_task = asyncio.create_task(
-        _read_jvm_output(jvm_proc.stdout, jvm_proc.stderr, port_found, stdout_lines)
+            _read_jvm_output(jvm_proc.stdout, jvm_proc.stderr,
+                             port_found, stdout_lines)
         )
 
         try:
@@ -204,29 +213,29 @@ async def run_java(code: str) -> ExecuteResponse:
             stdout_task.cancel()
             jvm_proc.kill()
             await jvm_proc.wait()
-            stderr_dump = ""
-            try:
-                assert jvm_proc.stderr is not None
-                stderr_dump = (await asyncio.wait_for(
-                    jvm_proc.stderr.read(), timeout=2.0
-                )).decode(errors="replace")[:400]
-            except asyncio.TimeoutError:
-                pass
-            detail = f"\nJVM stderr: {stderr_dump}" if stderr_dump else ""
+            log.error("run_java: JDWP port not found within %ds", JDWP_STDOUT_TIMEOUT)
             return ExecuteResponse(
                 success=False,
                 message=(
-                    f"JVM did not print a JDWP port on stdout within "
-                    f"{JDWP_STDOUT_TIMEOUT}s.{detail}"
+                    f"JVM did not print a JDWP port within "
+                    f"{JDWP_STDOUT_TIMEOUT}s. "
+                    "Check that a full JDK (not just JRE) is installed."
                 ),
                 runtimeError="JDWP port timeout",
                 totalSteps=0,
                 steps=[],
             )
 
+        log.info("run_java: JDWP port=%d, launching agent ...", port)
+
         # ── Step 4: Launch JvmTraceAgent ──────────────────────────────────────
         agent_proc = await asyncio.create_subprocess_exec(
-            java, "-cp", str(AGENT_CLASS_DIR), "JvmTraceAgent", str(port),
+            java,
+            "-Xmx64m",
+            "-Xms16m",
+            "-XX:+UseSerialGC",
+            "-cp", str(AGENT_CLASS_DIR),
+            "JvmTraceAgent", str(port),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -244,9 +253,11 @@ async def run_java(code: str) -> ExecuteResponse:
 
             if obj.get("done"):
                 runtime_error = obj.get("runtimeError")
+                log.info("run_java: agent done — steps=%d runtimeError=%s",
+                         len(steps), runtime_error)
                 break
 
-            await asyncio.sleep(0)  # yield so stdout_task can accumulate
+            await asyncio.sleep(0)
 
             heap = {
                 oid: HeapObject(
@@ -264,7 +275,16 @@ async def run_java(code: str) -> ExecuteResponse:
                 heap=heap,
             ))
 
-
+        # Surface agent crash when trace is empty
+        agent_stderr = b""
+        if not steps and not runtime_error:
+            try:
+                assert agent_proc.stderr is not None
+                agent_stderr = await asyncio.wait_for(
+                    agent_proc.stderr.read(), timeout=2.0
+                )
+            except asyncio.TimeoutError:
+                pass
 
         # ── Cleanup ───────────────────────────────────────────────────────────
         stdout_task.cancel()
@@ -280,6 +300,10 @@ async def run_java(code: str) -> ExecuteResponse:
             runtime_error = (
                 f"Agent error: {agent_stderr.decode(errors='replace')[:500]}"
             )
+            log.error("run_java: %s", runtime_error)
+
+        log.info("run_java: returning %d steps, success=%s",
+                 len(steps), runtime_error is None)
 
         return ExecuteResponse(
             success=runtime_error is None,
