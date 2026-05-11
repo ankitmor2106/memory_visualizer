@@ -284,13 +284,7 @@ Please ensure:
 - All steps are emitted with valid `currentLine`, `stack`, `heap`, and `stdout` fields.
 - The 500-step cap and timeout behaviour are preserved.
 
----
 
-## License
-
-MIT — see [LICENSE](LICENSE) for details.
-
----
 
 ## Author
 
