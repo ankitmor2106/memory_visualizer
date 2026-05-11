@@ -2,7 +2,7 @@
 
 A runtime execution tracing platform that lets you step through code line-by-line and watch Call Stack frames and Heap objects evolve in real time — across four languages.
 
-**Live Demo →** [Frontend on GitHub Pages](https://ankitmor.github.io/memory-visualizer/frontend/index.html) &nbsp;|&nbsp; **API →** [Backend on Render](https://memory-visualizer.onrender.com)
+**Live Demo →** [Frontend on GitHub Pages](https://ankitmor2106.github.io/memory-visualizer/frontend/index.html) &nbsp;|&nbsp; **API →** [Backend on Render](https://memory-visualizer.onrender.com)
 
 ---
 
