@@ -6,7 +6,6 @@
     <meta name="description" content="Memory Visualizer — Step-by-step runtime memory tracer for Java, Python, JavaScript and C++.">
     <meta name="robots" content="index, follow">
     <title>Memory Visualizer — Java, Python, JavaScript & C++ Runtime Tracer</title>
-
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Syne:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -89,11 +88,13 @@
             </div>
         </nav>
 
-        <!-- ══ MAIN WORKSPACE (side-by-side) ═══════════════════════════════ -->
+        <!-- ══ MAIN WORKSPACE ═══════════════════════════════════════════════ -->
         <main class="workspace" role="main">
 
             <!-- ── LEFT: Editor column ──────────────────────────────────── -->
             <div class="editor-column">
+
+                <!-- Code editor (always visible) -->
                 <section class="glass-panel editor-panel" aria-label="Code editor">
                     <div class="panel-header">
                         <span class="panel-title">
@@ -105,6 +106,7 @@
                     <div id="editor-container" role="textbox" aria-multiline="true" aria-label="Code input"></div>
                 </section>
 
+                <!-- Console — shown in Memory Trace mode -->
                 <section class="glass-panel console-panel" id="console-panel" aria-label="Console output">
                     <div class="panel-header">
                         <span class="panel-title">
@@ -114,16 +116,59 @@
                     </div>
                     <pre id="console-output" aria-live="polite" aria-atomic="true">Select a language and click ⚡ to compile.</pre>
                 </section>
-            </div>
+
+                <!-- HTML Template editor — shown only in Browser Run mode -->
+                <section class="glass-panel html-panel hidden" id="html-editor-panel" aria-label="HTML template editor">
+                    <div class="panel-header">
+                        <span class="panel-title">
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                                <path d="M3 2l-2 6 2 6M13 2l2 6-2 6M7 13l2-10"/>
+                            </svg>
+                            HTML Template
+                        </span>
+                        <span class="html-hint" title="Your JS runs inside this page structure">page structure for your JS</span>
+                    </div>
+                    <textarea
+                        id="html-editor"
+                        class="html-editor-textarea"
+                        spellcheck="false"
+                        aria-label="HTML template — edit the page your JS runs inside"
+                    ></textarea>
+                </section>
+
+            </div><!-- /editor-column -->
 
             <!-- ── RIGHT: Visualization column ─────────────────────────── -->
             <div class="viz-column">
                 <section class="glass-panel viz-panel" aria-label="Memory visualization">
 
-                    <!-- Compact toolbar -->
-                    <div class="viz-toolbar" role="toolbar" aria-label="Visualization controls">
+                    <!-- ══ TAB BAR — JS only, hidden for other langs ═══════ -->
+                    <div id="viz-tab-bar" class="viz-tab-bar hidden" role="tablist" aria-label="JavaScript run mode">
+                        <button id="tab-trace" class="viz-tab active" role="tab" aria-selected="true" aria-controls="memory-grid">
+                            <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                                <rect x="1" y="9.5" width="12" height="2.5" rx="1"/>
+                                <rect x="1" y="5.5" width="12" height="2.5" rx="1"/>
+                                <rect x="1" y="1.5" width="12" height="2.5" rx="1"/>
+                            </svg>
+                            Memory Trace
+                        </button>
+                        <button id="tab-browser" class="viz-tab" role="tab" aria-selected="false" aria-controls="browser-run-panel">
+                            <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                                <rect x="1" y="1" width="12" height="12" rx="2"/>
+                                <line x1="1" y1="5" x2="13" y2="5"/>
+                                <circle cx="3.2" cy="3" r="0.8" fill="currentColor"/>
+                                <circle cx="5.8" cy="3" r="0.8" fill="currentColor"/>
+                            </svg>
+                            Browser Run
+                        </button>
+                        <!-- Animated ink underline -->
+                        <div class="viz-tab-ink" id="viz-tab-ink" aria-hidden="true"></div>
+                    </div>
 
-                        <!-- Compile button (icon only) -->
+                    <!-- ══ TOOLBAR — Memory Trace only ═══════════════════ -->
+                    <div class="viz-toolbar" id="viz-toolbar" role="toolbar" aria-label="Visualization controls">
+
+                        <!-- Compile / Run button -->
                         <button id="btn-compile" class="toolbar-icon-btn compile-btn-icon" title="Compile &amp; trace (Ctrl+Enter)" aria-label="Compile and trace">
                             <svg class="compile-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                                 <path d="M10.5 1.5L3.5 9H7.5L5.5 14.5L13.5 6.5H9.5L10.5 1.5Z"/>
@@ -143,7 +188,7 @@
                             </svg>
                         </button>
 
-                        <!-- Step counter + progress -->
+                        <!-- Step counter + progress bar -->
                         <div class="toolbar-step-wrap" aria-live="polite" aria-atomic="true">
                             <span id="step-counter" class="toolbar-step-num">—</span>
                             <div class="toolbar-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
@@ -159,7 +204,7 @@
                             </svg>
                         </button>
 
-                        <!-- Play/Pause -->
+                        <!-- Auto-play -->
                         <button id="btn-play" class="toolbar-icon-btn" disabled title="Auto-play steps" aria-label="Auto-play steps">
                             <svg class="play-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                                 <polygon points="4,2 13,8 4,14"/>
@@ -172,9 +217,13 @@
 
                         <div class="toolbar-spacer" aria-hidden="true"></div>
 
-                        <!-- Line number chip -->
+                        <!-- Line chip -->
                         <span class="toolbar-line-chip" title="Current line">
-                            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><line x1="1" y1="3" x2="11" y2="3"/><line x1="1" y1="6" x2="8" y2="6"/><line x1="1" y1="9" x2="5" y2="9"/></svg>
+                            <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
+                                <line x1="1" y1="3" x2="11" y2="3"/>
+                                <line x1="1" y1="6" x2="8"  y2="6"/>
+                                <line x1="1" y1="9" x2="5"  y2="9"/>
+                            </svg>
                             L<span id="current-line-num">—</span>
                         </span>
 
@@ -182,15 +231,16 @@
                         <span id="viz-lang-tag" class="toolbar-lang-badge">Java</span>
                     </div>
 
-                    <!-- Cold-start notice (shown during compile) -->
+                    <!-- Cold-start notice -->
                     <div class="cold-start-notice" id="cold-start-notice" aria-live="polite">
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 5v3l2 2"/></svg>
                         Server may take 30+ seconds to wake up on first request.
                     </div>
 
-                    <!-- Viz body: empty state OR memory grid -->
+                    <!-- ══ VIZ BODY ═══════════════════════════════════════ -->
                     <div class="viz-body">
-                        <!-- Empty state -->
+
+                        <!-- Empty state (default) -->
                         <div id="viz-empty-state" class="viz-empty-state">
                             <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" width="40" height="40" opacity="0.25">
                                 <path d="M24 4L8 20h10L14 44l26-24H30L24 4Z"/>
@@ -199,8 +249,8 @@
                             <p class="empty-sub">Step through memory state line by line</p>
                         </div>
 
-                        <!-- Memory grid (hidden until compiled) -->
-                        <div class="memory-grid hidden" id="memory-grid">
+                        <!-- ── MEMORY TRACE ────────────────────────────── -->
+                        <div class="memory-grid hidden" id="memory-grid" role="region" aria-label="Memory visualization">
                             <!-- SVG arrow layer -->
                             <svg id="arrow-svg" aria-hidden="true" overflow="visible">
                                 <defs>
@@ -213,37 +263,88 @@
                                 </defs>
                             </svg>
 
-                            <!-- Call Stack -->
+                            <!-- Call Stack pane -->
                             <div class="memory-pane stack-pane">
                                 <div class="pane-header">
-                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="1" y="11" width="14" height="3" rx="1"/><rect x="1" y="6.5" width="14" height="3" rx="1"/><rect x="1" y="2" width="14" height="3" rx="1"/></svg>
+                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                                        <rect x="1" y="11" width="14" height="3" rx="1"/>
+                                        <rect x="1" y="6.5" width="14" height="3" rx="1"/>
+                                        <rect x="1" y="2" width="14" height="3" rx="1"/>
+                                    </svg>
                                     Call Stack
                                     <span class="pane-sub">variables &amp; refs</span>
                                 </div>
                                 <div id="stack-container" class="pane-body stack-body"></div>
                             </div>
 
-                            <!-- Heap Memory -->
+                            <!-- Heap pane -->
                             <div class="memory-pane heap-pane">
                                 <div class="pane-header">
-                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><ellipse cx="8" cy="4" rx="6" ry="2.5"/><path d="M2 4v3c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5V4"/><path d="M2 7v3c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5V7"/></svg>
+                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                                        <ellipse cx="8" cy="4" rx="6" ry="2.5"/>
+                                        <path d="M2 4v3c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5V4"/>
+                                        <path d="M2 7v3c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5V7"/>
+                                    </svg>
                                     Heap Memory
                                     <span class="pane-sub">objects &amp; arrays</span>
                                 </div>
                                 <div id="heap-container" class="pane-body heap-body"></div>
                             </div>
-                        </div>
-                    </div><!-- /viz-body -->
+                        </div><!-- /memory-grid -->
 
-                    <!-- Stdout strip -->
-                    <div class="stdout-strip">
-                        <div class="stdout-strip-header">
-                            <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><rect x="1" y="1" width="12" height="12" rx="2"/><path d="M4 5l2 2-2 2M7 9h4"/></svg>
-                            <span>stdout</span>
-                            <span id="step-stdout-preview" class="stdout-preview"></span>
-                        </div>
-                        <pre id="viz-stdout-content" class="stdout-content" aria-live="polite" aria-atomic="true">(no output)</pre>
-                    </div>
+                        <!-- ── BROWSER RUN PANEL ───────────────────────── -->
+                        <div id="browser-run-panel" class="browser-run-panel hidden" role="region" aria-label="Browser sandbox">
+
+                            <!-- Fake browser chrome + iframe -->
+                            <div class="browser-preview-wrap">
+                                <div class="browser-chrome">
+                                    <!-- Traffic-light dots -->
+                                    <span class="browser-dot" style="background:#ff5f57" aria-hidden="true"></span>
+                                    <span class="browser-dot" style="background:#febc2e" aria-hidden="true"></span>
+                                    <span class="browser-dot" style="background:#28c840" aria-hidden="true"></span>
+                                    <!-- Address bar -->
+                                    <span class="browser-addr" id="browser-addr">sandbox://browser-run</span>
+                                    <!-- Re-run button -->
+                                    <button id="browser-run-btn" class="browser-action-btn" title="Re-run code in sandbox" aria-label="Re-run code">
+                                        <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                                            <path d="M2.5 7a4.5 4.5 0 1 1 1.4 3.2"/>
+                                            <polyline points="2.5,3.5 2.5,7 6,7"/>
+                                        </svg>
+                                        Re-run
+                                    </button>
+                                </div>
+
+                                <!-- Live sandboxed iframe -->
+                                <iframe
+                                    id="browser-iframe"
+                                    class="browser-iframe"
+                                    sandbox="allow-scripts allow-modals allow-forms"
+                                    title="JavaScript browser sandbox"
+                                    aria-label="Live browser preview"
+                                ></iframe>
+                            </div>
+
+                            <!-- Browser console output -->
+                            <div class="browser-console-wrap">
+                                <div class="browser-console-hdr">
+                                    <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
+                                        <rect x="1" y="1" width="12" height="12" rx="2"/>
+                                        <path d="M4 5l2 2-2 2M7 9h4"/>
+                                    </svg>
+                                    Console
+                                    <button id="browser-clear-btn" class="browser-clear-btn" title="Clear console output" aria-label="Clear console">
+                                        <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                                            <path d="M1.5 1.5l7 7M8.5 1.5l-7 7"/>
+                                        </svg>
+                                        Clear
+                                    </button>
+                                </div>
+                                <div id="browser-console" class="browser-console" aria-live="polite" aria-label="Browser console output" role="log"></div>
+                            </div>
+
+                        </div><!-- /browser-run-panel -->
+
+                    </div><!-- /viz-body -->
 
                 </section>
             </div><!-- /viz-column -->
@@ -261,28 +362,26 @@
                 <!-- JAVA DOCS -->
                 <div id="docs-java" class="lang-docs active">
                     <div class="docs-layout">
-                        <nav class="docs-nav" aria-label="Java docs">
-                            <ul>
-                                <li><a href="#java-packages">Packages &amp; Imports</a></li>
-                                <li><a href="#java-classes">Classes &amp; Objects</a></li>
-                                <li><a href="#java-constructors">Constructors</a></li>
-                                <li><a href="#java-variables">Types of Variables</a></li>
-                                <li><a href="#java-methods">Methods &amp; Scope</a></li>
-                                <li><a href="#java-stack">The Call Stack</a></li>
-                                <li><a href="#java-heap">The Heap</a></li>
-                                <li><a href="#java-gc">Garbage Collection</a></li>
-                                <li><a href="#java-pbv">Pass-by-Value</a></li>
-                            </ul>
-                        </nav>
+                        <nav class="docs-nav" aria-label="Java docs"><ul>
+                            <li><a href="#java-packages">Packages &amp; Imports</a></li>
+                            <li><a href="#java-classes">Classes &amp; Objects</a></li>
+                            <li><a href="#java-constructors">Constructors</a></li>
+                            <li><a href="#java-variables">Types of Variables</a></li>
+                            <li><a href="#java-methods">Methods &amp; Scope</a></li>
+                            <li><a href="#java-stack">The Call Stack</a></li>
+                            <li><a href="#java-heap">The Heap</a></li>
+                            <li><a href="#java-gc">Garbage Collection</a></li>
+                            <li><a href="#java-pbv">Pass-by-Value</a></li>
+                        </ul></nav>
                         <div class="docs-content">
-                            <article id="java-packages" class="doc-card"><h3>Packages &amp; Imports</h3><p>A <strong>Package</strong> groups related classes to prevent naming conflicts.</p><div class="doc-code"><pre><code>package com.visualizer;\nimport java.util.List;</code></pre></div><a href="https://docs.oracle.com/javase/tutorial/java/package/packages.html" target="_blank" rel="noopener" class="doc-link">Official Package docs ↗</a></article>
-                            <article id="java-classes" class="doc-card"><h3>Classes &amp; Objects</h3><p>A <strong>Class</strong> is a blueprint. An <strong>Object</strong> is a runtime instance allocated on the Heap.</p><div class="doc-code"><pre><code>class Car { String color; }\nCar myCar = new Car(); // ref on Stack, object on Heap</code></pre></div><a href="https://docs.oracle.com/javase/tutorial/java/concepts/object.html" target="_blank" rel="noopener" class="doc-link">Official Object docs ↗</a></article>
-                            <article id="java-constructors" class="doc-card"><h3>Constructors</h3><p>A <strong>Constructor</strong> initialises a new object via the <code>new</code> keyword.</p><a href="https://docs.oracle.com/javase/tutorial/java/javaOO/constructors.html" target="_blank" rel="noopener" class="doc-link">Official Constructor docs ↗</a></article>
-                            <article id="java-variables" class="doc-card"><h3>Types of Variables</h3><p><strong>Primitives</strong> store values on the Stack. <strong>Reference types</strong> store a pointer to the Heap.</p><a href="https://docs.oracle.com/javase/tutorial/java/nutsandbolts/datatypes.html" target="_blank" rel="noopener" class="doc-link">Official Data Types docs ↗</a></article>
-                            <article id="java-methods" class="doc-card"><h3>Methods &amp; Scope</h3><p>Each method call pushes a new <em>frame</em> on the Call Stack. Variables die when the frame is popped.</p><a href="https://docs.oracle.com/javase/tutorial/java/javaOO/methods.html" target="_blank" rel="noopener" class="doc-link">Official Method docs ↗</a></article>
-                            <article id="java-stack" class="doc-card"><h3>The Call Stack</h3><p>A LIFO structure. Every method invocation pushes a frame storing locals and the return address.</p><a href="https://docs.oracle.com/javase/specs/jvms/se17/html/jvms-2.html#jvms-2.5.2" target="_blank" rel="noopener" class="doc-link">JVM Stack spec ↗</a></article>
-                            <article id="java-heap" class="doc-card"><h3>The Heap</h3><p>Shared, dynamic memory where all objects and arrays live. Access is via stack references.</p><a href="https://docs.oracle.com/javase/specs/jvms/se17/html/jvms-2.html#jvms-2.5.3" target="_blank" rel="noopener" class="doc-link">JVM Heap spec ↗</a></article>
-                            <article id="java-gc" class="doc-card"><h3>Garbage Collection</h3><p>When an object has zero reachable references, the GC marks it for deletion automatically.</p><a href="https://docs.oracle.com/en/java/javase/17/gctuning/introduction-garbage-collection.html" target="_blank" rel="noopener" class="doc-link">Official GC Guide ↗</a></article>
+                            <article id="java-packages" class="doc-card"><h3>Packages &amp; Imports</h3><p>A <strong>Package</strong> groups related classes to prevent naming conflicts.</p><div class="doc-code"><pre><code>package com.visualizer;\nimport java.util.List;</code></pre></div><a href="https://docs.oracle.com/javase/tutorial/java/package/packages.html" target="_blank" rel="noopener" class="doc-link">Official docs ↗</a></article>
+                            <article id="java-classes" class="doc-card"><h3>Classes &amp; Objects</h3><p>A <strong>Class</strong> is a blueprint. An <strong>Object</strong> is a runtime instance allocated on the Heap.</p><div class="doc-code"><pre><code>class Car { String color; }\nCar myCar = new Car(); // ref on Stack, object on Heap</code></pre></div><a href="https://docs.oracle.com/javase/tutorial/java/concepts/object.html" target="_blank" rel="noopener" class="doc-link">Official docs ↗</a></article>
+                            <article id="java-constructors" class="doc-card"><h3>Constructors</h3><p>A <strong>Constructor</strong> initialises a new object via the <code>new</code> keyword.</p><a href="https://docs.oracle.com/javase/tutorial/java/javaOO/constructors.html" target="_blank" rel="noopener" class="doc-link">Official docs ↗</a></article>
+                            <article id="java-variables" class="doc-card"><h3>Types of Variables</h3><p><strong>Primitives</strong> store values on the Stack. <strong>Reference types</strong> store a pointer to the Heap.</p><a href="https://docs.oracle.com/javase/tutorial/java/nutsandbolts/datatypes.html" target="_blank" rel="noopener" class="doc-link">Official docs ↗</a></article>
+                            <article id="java-methods" class="doc-card"><h3>Methods &amp; Scope</h3><p>Each method call pushes a new <em>frame</em> on the Call Stack. Variables die when the frame is popped.</p><a href="https://docs.oracle.com/javase/tutorial/java/javaOO/methods.html" target="_blank" rel="noopener" class="doc-link">Official docs ↗</a></article>
+                            <article id="java-stack" class="doc-card"><h3>The Call Stack</h3><p>A LIFO structure. Every method invocation pushes a frame storing locals and the return address.</p><a href="https://docs.oracle.com/javase/specs/jvms/se17/html/jvms-2.html#jvms-2.5.2" target="_blank" rel="noopener" class="doc-link">JVM spec ↗</a></article>
+                            <article id="java-heap" class="doc-card"><h3>The Heap</h3><p>Shared, dynamic memory where all objects and arrays live. Access is via stack references.</p><a href="https://docs.oracle.com/javase/specs/jvms/se17/html/jvms-2.html#jvms-2.5.3" target="_blank" rel="noopener" class="doc-link">JVM spec ↗</a></article>
+                            <article id="java-gc" class="doc-card"><h3>Garbage Collection</h3><p>When an object has zero reachable references, the GC marks it for deletion automatically.</p><a href="https://docs.oracle.com/en/java/javase/17/gctuning/introduction-garbage-collection.html" target="_blank" rel="noopener" class="doc-link">GC Guide ↗</a></article>
                             <article id="java-pbv" class="doc-card"><h3>Pass-by-Value</h3><p>Java passes a copy of the reference value. The method can mutate heap data but cannot reassign the caller's variable.</p><a href="https://docs.oracle.com/javase/tutorial/java/javaOO/arguments.html" target="_blank" rel="noopener" class="doc-link">Official docs ↗</a></article>
                         </div>
                     </div>
@@ -291,27 +390,25 @@
                 <!-- PYTHON DOCS -->
                 <div id="docs-python" class="lang-docs">
                     <div class="docs-layout">
-                        <nav class="docs-nav" aria-label="Python docs">
-                            <ul>
-                                <li><a href="#py-variables">Variables &amp; Types</a></li>
-                                <li><a href="#py-functions">Functions &amp; Scope</a></li>
-                                <li><a href="#py-classes">Classes &amp; Objects</a></li>
-                                <li><a href="#py-collections">Collections</a></li>
-                                <li><a href="#py-stack">The Call Stack</a></li>
-                                <li><a href="#py-heap">Heap &amp; Object Model</a></li>
-                                <li><a href="#py-gc">Garbage Collection</a></li>
-                                <li><a href="#py-refs">Pass-by-Object-Ref</a></li>
-                            </ul>
-                        </nav>
+                        <nav class="docs-nav" aria-label="Python docs"><ul>
+                            <li><a href="#py-variables">Variables &amp; Types</a></li>
+                            <li><a href="#py-functions">Functions &amp; Scope</a></li>
+                            <li><a href="#py-classes">Classes &amp; Objects</a></li>
+                            <li><a href="#py-collections">Collections</a></li>
+                            <li><a href="#py-stack">The Call Stack</a></li>
+                            <li><a href="#py-heap">Heap &amp; Object Model</a></li>
+                            <li><a href="#py-gc">Garbage Collection</a></li>
+                            <li><a href="#py-refs">Pass-by-Object-Ref</a></li>
+                        </ul></nav>
                         <div class="docs-content">
-                            <article id="py-variables" class="doc-card"><h3>Variables &amp; Types</h3><p>Python is <strong>dynamically typed</strong>. Variables are names pointing to heap objects.</p><div class="doc-code"><pre><code>x = 42\nname = "Ada"\nx = 3.14  # x now points to a new float</code></pre></div><a href="https://docs.python.org/3/library/stdtypes.html" target="_blank" rel="noopener" class="doc-link">Official Built-in Types ↗</a></article>
+                            <article id="py-variables" class="doc-card"><h3>Variables &amp; Types</h3><p>Python is <strong>dynamically typed</strong>. Variables are names pointing to heap objects.</p><div class="doc-code"><pre><code>x = 42\nname = "Ada"\nx = 3.14  # x now points to a new float</code></pre></div><a href="https://docs.python.org/3/library/stdtypes.html" target="_blank" rel="noopener" class="doc-link">Built-in Types ↗</a></article>
                             <article id="py-functions" class="doc-card"><h3>Functions &amp; Scope (LEGB)</h3><p>Python uses <strong>LEGB</strong> scope: Local → Enclosing → Global → Built-in.</p><a href="https://docs.python.org/3/reference/executionmodel.html" target="_blank" rel="noopener" class="doc-link">Execution Model ↗</a></article>
-                            <article id="py-classes" class="doc-card"><h3>Classes &amp; Objects</h3><p>Everything in Python is an object. <code>__init__</code> initialises instance attributes; <code>self</code> is explicit.</p><a href="https://docs.python.org/3/tutorial/classes.html" target="_blank" rel="noopener" class="doc-link">Official Classes docs ↗</a></article>
-                            <article id="py-collections" class="doc-card"><h3>Lists, Dicts &amp; Sets</h3><p><strong>list</strong> — ordered, mutable. <strong>dict</strong> — key-value. <strong>set</strong> — unique. <strong>tuple</strong> — immutable. All heap-allocated.</p><a href="https://docs.python.org/3/library/stdtypes.html" target="_blank" rel="noopener" class="doc-link">Sequence Types ↗</a></article>
+                            <article id="py-classes" class="doc-card"><h3>Classes &amp; Objects</h3><p>Everything in Python is an object. <code>__init__</code> initialises instance attributes; <code>self</code> is explicit.</p><a href="https://docs.python.org/3/tutorial/classes.html" target="_blank" rel="noopener" class="doc-link">Classes docs ↗</a></article>
+                            <article id="py-collections" class="doc-card"><h3>Lists, Dicts &amp; Sets</h3><p><strong>list</strong> — ordered. <strong>dict</strong> — key-value. <strong>set</strong> — unique. <strong>tuple</strong> — immutable.</p><a href="https://docs.python.org/3/library/stdtypes.html" target="_blank" rel="noopener" class="doc-link">Sequence Types ↗</a></article>
                             <article id="py-stack" class="doc-card"><h3>The Call Stack</h3><p>Python maintains a stack of <strong>frame objects</strong>. Deep recursion raises <code>RecursionError</code>.</p><a href="https://docs.python.org/3/reference/datamodel.html#frame-objects" target="_blank" rel="noopener" class="doc-link">Frame Objects ↗</a></article>
                             <article id="py-heap" class="doc-card"><h3>Heap &amp; Object Model</h3><p>All Python objects live on the heap. CPython uses pooled allocators for small objects.</p><a href="https://docs.python.org/3/c-api/memory.html" target="_blank" rel="noopener" class="doc-link">Memory Management ↗</a></article>
                             <article id="py-gc" class="doc-card"><h3>Garbage Collection</h3><p>CPython uses <strong>reference counting</strong>. A cyclic GC handles reference cycles.</p><a href="https://docs.python.org/3/library/gc.html" target="_blank" rel="noopener" class="doc-link">gc module ↗</a></article>
-                            <article id="py-refs" class="doc-card"><h3>Pass-by-Object-Reference</h3><p>Python passes the reference value. Mutating a mutable argument affects the original.</p><a href="https://docs.python.org/3/faq/programming.html#how-do-i-write-a-function-with-output-parameters-call-by-reference" target="_blank" rel="noopener" class="doc-link">FAQ ↗</a></article>
+                            <article id="py-refs" class="doc-card"><h3>Pass-by-Object-Reference</h3><p>Python passes the reference value. Mutating a mutable argument affects the original.</p><a href="https://docs.python.org/3/faq/programming.html" target="_blank" rel="noopener" class="doc-link">FAQ ↗</a></article>
                         </div>
                     </div>
                 </div>
@@ -319,27 +416,25 @@
                 <!-- JAVASCRIPT DOCS -->
                 <div id="docs-javascript" class="lang-docs">
                     <div class="docs-layout">
-                        <nav class="docs-nav" aria-label="JavaScript docs">
-                            <ul>
-                                <li><a href="#js-variables">var / let / const</a></li>
-                                <li><a href="#js-closures">Closures</a></li>
-                                <li><a href="#js-classes">Classes &amp; Prototypes</a></li>
-                                <li><a href="#js-callstack">Call Stack &amp; Event Loop</a></li>
-                                <li><a href="#js-scope">Scope &amp; Hoisting</a></li>
-                                <li><a href="#js-heap">Heap Memory</a></li>
-                                <li><a href="#js-gc">Garbage Collection</a></li>
-                                <li><a href="#js-refs">Primitives vs References</a></li>
-                            </ul>
-                        </nav>
+                        <nav class="docs-nav" aria-label="JavaScript docs"><ul>
+                            <li><a href="#js-variables">var / let / const</a></li>
+                            <li><a href="#js-closures">Closures</a></li>
+                            <li><a href="#js-classes">Classes &amp; Prototypes</a></li>
+                            <li><a href="#js-callstack">Call Stack &amp; Event Loop</a></li>
+                            <li><a href="#js-scope">Scope &amp; Hoisting</a></li>
+                            <li><a href="#js-heap">Heap Memory</a></li>
+                            <li><a href="#js-gc">Garbage Collection</a></li>
+                            <li><a href="#js-refs">Primitives vs References</a></li>
+                        </ul></nav>
                         <div class="docs-content">
-                            <article id="js-variables" class="doc-card"><h3>var / let / const</h3><p><code>var</code> is function-scoped and hoisted. <code>let</code> and <code>const</code> are block-scoped. Prefer <code>const</code>.</p><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Grammar_and_types#declarations" target="_blank" rel="noopener" class="doc-link">MDN — Declarations ↗</a></article>
-                            <article id="js-closures" class="doc-card"><h3>Closures</h3><p>A <strong>closure</strong> retains access to its enclosing lexical scope even after that scope returns.</p><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Closures" target="_blank" rel="noopener" class="doc-link">MDN — Closures ↗</a></article>
-                            <article id="js-classes" class="doc-card"><h3>Classes &amp; Prototypes</h3><p>JavaScript is prototype-based. <code>class</code> is sugar over prototype chains.</p><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Classes" target="_blank" rel="noopener" class="doc-link">MDN — Classes ↗</a></article>
-                            <article id="js-callstack" class="doc-card"><h3>Call Stack &amp; Event Loop</h3><p>JS is single-threaded. The <strong>Event Loop</strong> moves async callbacks to the stack only when it's empty.</p><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Event_loop" target="_blank" rel="noopener" class="doc-link">MDN — Event Loop ↗</a></article>
-                            <article id="js-scope" class="doc-card"><h3>Scope &amp; Hoisting</h3><p><code>var</code> declarations are hoisted. <code>let</code>/<code>const</code> enter the temporal dead zone until initialised.</p><a href="https://developer.mozilla.org/en-US/docs/Glossary/Hoisting" target="_blank" rel="noopener" class="doc-link">MDN — Hoisting ↗</a></article>
-                            <article id="js-heap" class="doc-card"><h3>Heap Memory</h3><p>Objects and closures are allocated on the V8 Heap, split into young and old generations.</p><a href="https://v8.dev/blog/trash-talk" target="_blank" rel="noopener" class="doc-link">V8 — Trash Talk ↗</a></article>
-                            <article id="js-gc" class="doc-card"><h3>Garbage Collection</h3><p>V8 uses <strong>mark-and-sweep</strong> with generational collection. Unreachable objects are collected.</p><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Memory_management" target="_blank" rel="noopener" class="doc-link">MDN — Memory Management ↗</a></article>
-                            <article id="js-refs" class="doc-card"><h3>Primitives vs References</h3><p>Primitives copied by <em>value</em>. Objects by <em>reference</em> — two variables can point to the same heap object.</p><a href="https://developer.mozilla.org/en-US/docs/Glossary/Primitive" target="_blank" rel="noopener" class="doc-link">MDN — Primitive ↗</a></article>
+                            <article id="js-variables" class="doc-card"><h3>var / let / const</h3><p><code>var</code> is function-scoped and hoisted. <code>let</code> and <code>const</code> are block-scoped. Prefer <code>const</code>.</p><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Grammar_and_types#declarations" target="_blank" rel="noopener" class="doc-link">MDN ↗</a></article>
+                            <article id="js-closures" class="doc-card"><h3>Closures</h3><p>A <strong>closure</strong> retains access to its enclosing lexical scope even after that scope returns.</p><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Closures" target="_blank" rel="noopener" class="doc-link">MDN ↗</a></article>
+                            <article id="js-classes" class="doc-card"><h3>Classes &amp; Prototypes</h3><p>JavaScript is prototype-based. <code>class</code> is sugar over prototype chains.</p><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Classes" target="_blank" rel="noopener" class="doc-link">MDN ↗</a></article>
+                            <article id="js-callstack" class="doc-card"><h3>Call Stack &amp; Event Loop</h3><p>JS is single-threaded. The <strong>Event Loop</strong> moves async callbacks to the stack only when it's empty.</p><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Event_loop" target="_blank" rel="noopener" class="doc-link">MDN ↗</a></article>
+                            <article id="js-scope" class="doc-card"><h3>Scope &amp; Hoisting</h3><p><code>var</code> declarations are hoisted. <code>let</code>/<code>const</code> enter the temporal dead zone until initialised.</p><a href="https://developer.mozilla.org/en-US/docs/Glossary/Hoisting" target="_blank" rel="noopener" class="doc-link">MDN ↗</a></article>
+                            <article id="js-heap" class="doc-card"><h3>Heap Memory</h3><p>Objects and closures are allocated on the V8 Heap, split into young and old generations.</p><a href="https://v8.dev/blog/trash-talk" target="_blank" rel="noopener" class="doc-link">V8 blog ↗</a></article>
+                            <article id="js-gc" class="doc-card"><h3>Garbage Collection</h3><p>V8 uses <strong>mark-and-sweep</strong> with generational collection. Unreachable objects are collected.</p><a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript/Memory_management" target="_blank" rel="noopener" class="doc-link">MDN ↗</a></article>
+                            <article id="js-refs" class="doc-card"><h3>Primitives vs References</h3><p>Primitives copied by <em>value</em>. Objects by <em>reference</em> — two variables can share one heap object.</p><a href="https://developer.mozilla.org/en-US/docs/Glossary/Primitive" target="_blank" rel="noopener" class="doc-link">MDN ↗</a></article>
                         </div>
                     </div>
                 </div>
@@ -347,27 +442,25 @@
                 <!-- C++ DOCS -->
                 <div id="docs-cpp" class="lang-docs">
                     <div class="docs-layout">
-                        <nav class="docs-nav" aria-label="C++ docs">
-                            <ul>
-                                <li><a href="#cpp-variables">Variables &amp; Primitives</a></li>
-                                <li><a href="#cpp-pointers">Pointers &amp; References</a></li>
-                                <li><a href="#cpp-dynamic">Dynamic Memory</a></li>
-                                <li><a href="#cpp-stackheap">Stack vs Heap</a></li>
-                                <li><a href="#cpp-classes">Classes &amp; Structs</a></li>
-                                <li><a href="#cpp-raii">RAII</a></li>
-                                <li><a href="#cpp-smart">Smart Pointers</a></li>
-                                <li><a href="#cpp-templates">Templates</a></li>
-                            </ul>
-                        </nav>
+                        <nav class="docs-nav" aria-label="C++ docs"><ul>
+                            <li><a href="#cpp-variables">Variables &amp; Primitives</a></li>
+                            <li><a href="#cpp-pointers">Pointers &amp; References</a></li>
+                            <li><a href="#cpp-dynamic">Dynamic Memory</a></li>
+                            <li><a href="#cpp-stackheap">Stack vs Heap</a></li>
+                            <li><a href="#cpp-classes">Classes &amp; Structs</a></li>
+                            <li><a href="#cpp-raii">RAII</a></li>
+                            <li><a href="#cpp-smart">Smart Pointers</a></li>
+                            <li><a href="#cpp-templates">Templates</a></li>
+                        </ul></nav>
                         <div class="docs-content">
-                            <article id="cpp-variables" class="doc-card"><h3>Variables &amp; Primitive Types</h3><p>C++ is <strong>statically typed</strong>. Core types: <code>int</code>, <code>double</code>, <code>bool</code>, <code>char</code>. Use <code>auto</code> for inference.</p><a href="https://en.cppreference.com/w/cpp/language/types" target="_blank" rel="noopener" class="doc-link">cppreference — Types ↗</a></article>
-                            <article id="cpp-pointers" class="doc-card"><h3>Pointers &amp; References</h3><p>A <strong>pointer</strong> (<code>T*</code>) stores an address. A <strong>reference</strong> (<code>T&amp;</code>) is an alias.</p><div class="doc-code"><pre><code>int x = 10;\nint* ptr = &amp;x;  // pointer\nint&amp; ref = x;   // reference\n*ptr = 20;</code></pre></div><a href="https://en.cppreference.com/w/cpp/language/pointer" target="_blank" rel="noopener" class="doc-link">cppreference — Pointer ↗</a></article>
-                            <article id="cpp-dynamic" class="doc-card"><h3>Dynamic Memory</h3><p><code>new</code> allocates on the heap. <code>delete</code> frees it. Modern C++ prefers smart pointers.</p><a href="https://en.cppreference.com/w/cpp/memory/new/operator_new" target="_blank" rel="noopener" class="doc-link">cppreference — new ↗</a></article>
-                            <article id="cpp-stackheap" class="doc-card"><h3>Stack vs Heap</h3><p>The <strong>Stack</strong> is automatic — locals destroyed deterministically. The <strong>Heap</strong> is manual/RAII managed.</p><a href="https://en.cppreference.com/w/cpp/language/storage_duration" target="_blank" rel="noopener" class="doc-link">Storage duration ↗</a></article>
-                            <article id="cpp-classes" class="doc-card"><h3>Classes &amp; Structs</h3><p><code>struct</code> members are <strong>public</strong> by default; <code>class</code> members are <strong>private</strong>.</p><a href="https://en.cppreference.com/w/cpp/language/class" target="_blank" rel="noopener" class="doc-link">cppreference — Class ↗</a></article>
-                            <article id="cpp-raii" class="doc-card"><h3>RAII</h3><p>Resource Acquisition Is Initialisation: acquire in constructor, release in destructor. Guaranteed cleanup on exceptions.</p><a href="https://en.cppreference.com/w/cpp/language/raii" target="_blank" rel="noopener" class="doc-link">cppreference — RAII ↗</a></article>
-                            <article id="cpp-smart" class="doc-card"><h3>Smart Pointers</h3><p><code>unique_ptr</code> — sole ownership. <code>shared_ptr</code> — shared via ref-count. <code>weak_ptr</code> — non-owning.</p><div class="doc-code"><pre><code>auto p = std::make_unique&lt;int&gt;(42);\nauto s = std::make_shared&lt;Dog&gt;("Rex");</code></pre></div><a href="https://en.cppreference.com/w/cpp/memory/unique_ptr" target="_blank" rel="noopener" class="doc-link">cppreference — unique_ptr ↗</a></article>
-                            <article id="cpp-templates" class="doc-card"><h3>Templates</h3><p>Templates enable <strong>generic programming</strong>. The compiler instantiates a concrete version per type used.</p><div class="doc-code"><pre><code>template&lt;typename T&gt;\nT add(T a, T b) { return a + b; }</code></pre></div><a href="https://en.cppreference.com/w/cpp/language/templates" target="_blank" rel="noopener" class="doc-link">cppreference — Templates ↗</a></article>
+                            <article id="cpp-variables" class="doc-card"><h3>Variables &amp; Primitive Types</h3><p>C++ is <strong>statically typed</strong>. Core types: <code>int</code>, <code>double</code>, <code>bool</code>, <code>char</code>. Use <code>auto</code> for inference.</p><a href="https://en.cppreference.com/w/cpp/language/types" target="_blank" rel="noopener" class="doc-link">cppreference ↗</a></article>
+                            <article id="cpp-pointers" class="doc-card"><h3>Pointers &amp; References</h3><p>A <strong>pointer</strong> (<code>T*</code>) stores an address. A <strong>reference</strong> (<code>T&amp;</code>) is an alias — no null, no reseating.</p><a href="https://en.cppreference.com/w/cpp/language/pointer" target="_blank" rel="noopener" class="doc-link">cppreference ↗</a></article>
+                            <article id="cpp-dynamic" class="doc-card"><h3>Dynamic Memory</h3><p><code>new</code> allocates on the heap. <code>delete</code> frees it. Modern C++ prefers smart pointers over raw pointers.</p><a href="https://en.cppreference.com/w/cpp/memory/new/operator_new" target="_blank" rel="noopener" class="doc-link">cppreference ↗</a></article>
+                            <article id="cpp-stackheap" class="doc-card"><h3>Stack vs Heap</h3><p>The <strong>Stack</strong> is automatic — locals destroyed deterministically. The <strong>Heap</strong> is manual or RAII managed.</p><a href="https://en.cppreference.com/w/cpp/language/storage_duration" target="_blank" rel="noopener" class="doc-link">Storage duration ↗</a></article>
+                            <article id="cpp-classes" class="doc-card"><h3>Classes &amp; Structs</h3><p><code>struct</code> members are <strong>public</strong> by default; <code>class</code> members are <strong>private</strong>.</p><a href="https://en.cppreference.com/w/cpp/language/class" target="_blank" rel="noopener" class="doc-link">cppreference ↗</a></article>
+                            <article id="cpp-raii" class="doc-card"><h3>RAII</h3><p>Resource Acquisition Is Initialisation — acquire in constructor, release in destructor. Guaranteed cleanup.</p><a href="https://en.cppreference.com/w/cpp/language/raii" target="_blank" rel="noopener" class="doc-link">cppreference ↗</a></article>
+                            <article id="cpp-smart" class="doc-card"><h3>Smart Pointers</h3><p><code>unique_ptr</code> — sole ownership. <code>shared_ptr</code> — shared ref-count. <code>weak_ptr</code> — non-owning.</p><div class="doc-code"><pre><code>auto p = std::make_unique&lt;int&gt;(42);\nauto s = std::make_shared&lt;Dog&gt;("Rex");</code></pre></div><a href="https://en.cppreference.com/w/cpp/memory/unique_ptr" target="_blank" rel="noopener" class="doc-link">cppreference ↗</a></article>
+                            <article id="cpp-templates" class="doc-card"><h3>Templates</h3><p>Templates enable <strong>generic programming</strong>. The compiler instantiates a concrete version per type used.</p><div class="doc-code"><pre><code>template&lt;typename T&gt;\nT add(T a, T b) { return a + b; }</code></pre></div><a href="https://en.cppreference.com/w/cpp/language/templates" target="_blank" rel="noopener" class="doc-link">cppreference ↗</a></article>
                         </div>
                     </div>
                 </div>
@@ -381,7 +474,7 @@
                 <p class="footer-copy">© 2026 Memory Visualizer Project</p>
             </div>
         </footer>
-    </div>
+    </div><!-- /app-shell -->
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.36.1/min/vs/loader.min.js"></script>
     <script src="app.js"></script>
