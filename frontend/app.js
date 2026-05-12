@@ -1,10 +1,11 @@
 /**
  * app.js — Polyglot Memory Visualizer
  *
- * Layout: side-by-side editor | visualizer (no modal).
- * Features: Monaco line highlighting, per-step stdout strip,
- *           icon-only toolbar, compile = compile+run combined,
- *           keyboard shortcuts (Ctrl+Enter compile, ←/→ step).
+ * Two-tab JS mode:
+ *   • Memory Trace  — sends code to backend CDP tracer, shows stack/heap
+ *   • Browser Run   — runs JS in sandboxed iframe with HTML template editor
+ *
+ * Stdout strip removed; backend console stays in left panel.
  */
 
 'use strict';
@@ -41,18 +42,79 @@ const DEFAULT_CODES = {
     cpp: `#include <iostream>\n#include <vector>\n#include <string>\nusing namespace std;\n\nint sumArray(vector<int>& arr) {\n    int total = 0;\n    for (int x : arr) total += x;\n    return total;\n}\n\nint main() {\n    vector<int> nums = {10, 20, 30, 40, 50};\n    string label = "Sum";\n    int result = sumArray(nums);\n    cout << label << ": " << result << endl;\n    return 0;\n}`
 };
 
+/** Default JS shown when switching to Browser Run for the first time */
+const DEFAULT_BROWSER_JS = `// This code runs in the browser sandbox.
+// It can interact with the HTML template on the left!
+
+const btn    = document.getElementById('btn');
+const output = document.getElementById('output');
+const list   = document.getElementById('list');
+let clicks   = 0;
+
+btn.addEventListener('click', () => {
+  clicks++;
+  output.textContent = \`Button clicked \${clicks} time\${clicks !== 1 ? 's' : ''}!\`;
+
+  const li = document.createElement('li');
+  li.textContent = \`Click #\${clicks} — \${new Date().toLocaleTimeString()}\`;
+  list.appendChild(li);
+
+  console.log('click event', clicks);
+});
+
+// Run once on load
+output.textContent = 'Page ready — click the button above!';
+console.log('Script loaded ✔');
+`;
+
+/** Default HTML template for the browser run HTML editor */
+const DEFAULT_BROWSER_HTML = `<div id="app">
+  <h2 id="title">Browser Sandbox</h2>
+  <p id="output">Output appears here…</p>
+  <button id="btn">Click Me</button>
+  <ul id="list"></ul>
+</div>
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    font-family: system-ui, sans-serif;
+    padding: 18px; margin: 0;
+    background: #fff; color: #111;
+    font-size: 14px; line-height: 1.5;
+  }
+  h2   { margin: 0 0 10px; font-size: 1.1rem; font-weight: 700; }
+  #output {
+    padding: 9px 13px;
+    background: #f3f4f6; border-radius: 8px;
+    margin-bottom: 12px; min-height: 36px;
+    color: #374151; font-size: 0.9rem;
+  }
+  button {
+    padding: 7px 18px; border-radius: 6px;
+    border: 1px solid #d1d5db; background: #fff;
+    cursor: pointer; font-size: 13px;
+    margin-bottom: 12px; transition: background .15s;
+  }
+  button:hover { background: #f9fafb; }
+  ul { margin: 0; padding-left: 18px; }
+  li { padding: 3px 0; color: #374151; font-size: 0.85rem; }
+</style>`;
+
 /* ═══════════════════════════════════════════════════════════════
    2. STATE
    ═══════════════════════════════════════════════════════════════ */
-let editor           = null;
-let currentLang      = 'java';
-let executionSteps   = [];
-let currentStepIndex = 0;
-let runtimeError     = null;
-let isPlaying        = false;
-let playTimer        = null;
-let arrowCleanup     = [];
-let currentDecorations = [];          // Monaco line-highlight decorations
+let editor             = null;
+let currentLang        = 'java';
+let executionSteps     = [];
+let currentStepIndex   = 0;
+let runtimeError       = null;
+let isPlaying          = false;
+let playTimer          = null;
+let arrowCleanup       = [];
+let currentDecorations = [];
+let jsRunMode          = 'trace';   // 'trace' | 'browser'
+let browserJsInjected  = false;     // true once we pre-fill browser JS
 const collapsedHeapObjects = new Set();
 
 /* ═══════════════════════════════════════════════════════════════
@@ -60,37 +122,55 @@ const collapsedHeapObjects = new Set();
    ═══════════════════════════════════════════════════════════════ */
 const $ = id => document.getElementById(id);
 
-const elBtnCompile      = $('btn-compile');
-const elCompileLoader   = $('compile-loader');
-const elColdNotice      = $('cold-start-notice');
-const elConsoleOut      = $('console-output');
-const elThemeToggle     = $('theme-toggle');
-const elServerStatus    = $('server-status');
-const elStatusText      = elServerStatus.querySelector('.status-text');
+const elBtnCompile       = $('btn-compile');
+const elCompileLoader    = $('compile-loader');
+const elColdNotice       = $('cold-start-notice');
+const elConsoleOut       = $('console-output');
+const elThemeToggle      = $('theme-toggle');
+const elServerStatus     = $('server-status');
+const elStatusText       = elServerStatus.querySelector('.status-text');
+const elConsolePanel     = $('console-panel');
 
 // Toolbar step controls
-const elBtnPrev         = $('btn-prev');
-const elBtnNext         = $('btn-next');
-const elBtnPlay         = $('btn-play');
-const elStepCounter     = $('step-counter');
-const elProgressFill    = $('step-progress-fill');
-const elCurrentLineNum  = $('current-line-num');
-const elStdoutPreview   = $('step-stdout-preview');
-const elStepsInfo       = $('stat-steps-info');
+const elBtnPrev          = $('btn-prev');
+const elBtnNext          = $('btn-next');
+const elBtnPlay          = $('btn-play');
+const elStepCounter      = $('step-counter');
+const elProgressFill     = $('step-progress-fill');
+const elCurrentLineNum   = $('current-line-num');
+const elStepsInfo        = $('stat-steps-info');
+const elVizToolbar       = $('viz-toolbar');
 
 // Visualization area
-const elVizEmptyState   = $('viz-empty-state');
-const elMemoryGrid      = $('memory-grid');
-const elStackContainer  = $('stack-container');
-const elHeapContainer   = $('heap-container');
-const elArrowSVG        = $('arrow-svg');
-const elVizStdout       = $('viz-stdout-content');
+const elVizEmptyState    = $('viz-empty-state');
+const elMemoryGrid       = $('memory-grid');
+const elStackContainer   = $('stack-container');
+const elHeapContainer    = $('heap-container');
+const elArrowSVG         = $('arrow-svg');
 
 // Language / misc
 const elCurrentLangBadge = $('current-lang-badge');
 const elModalLangTag     = $('viz-lang-tag');
 const elLangBtns         = document.querySelectorAll('.lang-btn');
 const elDocSections      = document.querySelectorAll('.lang-docs');
+
+// ── JS Tab bar ────────────────────────────────────────────────────
+const elVizTabBar        = $('viz-tab-bar');
+const elTabTrace         = $('tab-trace');
+const elTabBrowser       = $('tab-browser');
+const elVizTabInk        = $('viz-tab-ink');
+
+// ── Browser Run panel ─────────────────────────────────────────────
+const elBrowserRunPanel  = $('browser-run-panel');
+const elBrowserIframe    = $('browser-iframe');
+const elBrowserConsole   = $('browser-console');
+const elBrowserRunBtn    = $('browser-run-btn');
+const elBrowserClearBtn  = $('browser-clear-btn');
+const elBrowserAddrBar   = $('browser-addr');
+
+// ── HTML template editor ──────────────────────────────────────────
+const elHtmlEditorPanel  = $('html-editor-panel');
+const elHtmlEditor       = $('html-editor');
 
 /* ═══════════════════════════════════════════════════════════════
    4. THEME
@@ -134,9 +214,9 @@ function initMonaco() {
             scrollbar: { verticalScrollbarSize: 5, horizontalScrollbarSize: 5 },
         });
 
-        // Smart Lock: invalidate trace when code is edited
+        // Smart Lock: invalidate trace when code is edited (trace mode only)
         editor.onDidChangeModelContent(() => {
-            if (executionSteps.length > 0) {
+            if (jsRunMode === 'trace' && executionSteps.length > 0) {
                 clearEditorHighlight();
                 disableStepControls();
                 setConsole('Code modified — recompile to update the trace.');
@@ -146,7 +226,7 @@ function initMonaco() {
             }
         });
 
-        // Ctrl+Enter to compile
+        // Ctrl+Enter to compile / run
         editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
             elBtnCompile.click();
         });
@@ -196,11 +276,263 @@ elLangBtns.forEach(btn => {
         elCurrentLangBadge.textContent = label;
         elModalLangTag.textContent = label;
 
+        if (lang === 'javascript') {
+            // Show tab bar, default to trace
+            elVizTabBar.classList.remove('hidden');
+            setJsMode('trace');
+        } else {
+            // Hide tab bar, reset to trace layout
+            elVizTabBar.classList.add('hidden');
+            jsRunMode = 'trace';
+            elBrowserRunPanel.classList.add('hidden');
+            elVizToolbar.classList.remove('hidden');
+            elConsolePanel.classList.remove('hidden');
+            elHtmlEditorPanel.classList.add('hidden');
+        }
+
         resetViz();
         setConsole(`Ready to trace ${label}. Click ⚡ to compile.`);
         clearEditorHighlight();
     });
 });
+
+/* ═══════════════════════════════════════════════════════════════
+   6b. JS TAB SYSTEM — Memory Trace ↔ Browser Run
+   ═══════════════════════════════════════════════════════════════ */
+
+/** Move the ink underline to whichever tab is active */
+function updateTabInk(mode) {
+    if (!elVizTabInk || !elTabTrace || !elTabBrowser) return;
+    const target = mode === 'trace' ? elTabTrace : elTabBrowser;
+    const barRect  = elVizTabBar.getBoundingClientRect();
+    const tabRect  = target.getBoundingClientRect();
+    elVizTabInk.style.left  = (tabRect.left - barRect.left) + 'px';
+    elVizTabInk.style.width = tabRect.width + 'px';
+}
+
+/** Switch between memory-trace and browser-run panels */
+function setJsMode(mode) {
+    jsRunMode = mode;
+
+    elTabTrace.classList.toggle('active',   mode === 'trace');
+    elTabBrowser.classList.toggle('active', mode === 'browser');
+    elTabTrace.setAttribute('aria-selected',   String(mode === 'trace'));
+    elTabBrowser.setAttribute('aria-selected', String(mode === 'browser'));
+
+    // Defer ink so layout is settled
+    requestAnimationFrame(() => updateTabInk(mode));
+
+    if (mode === 'browser') {
+        // ── Show browser panel, hide trace UI ─────────────────
+        elVizToolbar.classList.add('hidden');
+        elVizEmptyState.classList.add('hidden');
+        elMemoryGrid.classList.add('hidden');
+        elBrowserRunPanel.classList.remove('hidden');
+
+        // Left column: swap console → HTML editor
+        elConsolePanel.classList.add('hidden');
+        elHtmlEditorPanel.classList.remove('hidden');
+
+        // Pre-fill HTML editor default once
+        if (elHtmlEditor && !elHtmlEditor.value.trim()) {
+            elHtmlEditor.value = DEFAULT_BROWSER_HTML;
+        }
+
+        // Pre-fill default browser JS once
+        if (!browserJsInjected && editor) {
+            editor.setValue(DEFAULT_BROWSER_JS);
+            browserJsInjected = true;
+        }
+
+        disableStepControls();
+        clearEditorHighlight();
+
+    } else {
+        // ── Show trace panel, hide browser UI ─────────────────
+        elVizToolbar.classList.remove('hidden');
+        elBrowserRunPanel.classList.add('hidden');
+
+        // Left column: show console, hide HTML editor
+        elConsolePanel.classList.remove('hidden');
+        elHtmlEditorPanel.classList.add('hidden');
+
+        if (executionSteps.length > 0) {
+            showMemoryGrid();
+            enableStepControls();
+            renderStep();
+        } else {
+            showEmptyState('Switch to Memory Trace — compile to visualize');
+        }
+    }
+}
+
+elTabTrace.addEventListener('click',   () => setJsMode('trace'));
+elTabBrowser.addEventListener('click', () => setJsMode('browser'));
+
+/* ── Browser run / clear buttons ─────────────────────────────── */
+elBrowserRunBtn.addEventListener('click', () => {
+    if (!editor) return;
+    runInBrowser(editor.getValue().trim(), elHtmlEditor ? elHtmlEditor.value : '');
+});
+
+elBrowserClearBtn.addEventListener('click', () => {
+    elBrowserConsole.innerHTML = '';
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   6c. RUN IN BROWSER (sandboxed iframe)
+   ═══════════════════════════════════════════════════════════════ */
+
+/**
+ * Execute user JS inside a sandboxed iframe that contains htmlTemplate.
+ * Console methods are intercepted and piped via postMessage.
+ *
+ * @param {string} jsCode        — user JavaScript
+ * @param {string} htmlTemplate  — HTML+CSS from the template editor
+ */
+function runInBrowser(jsCode, htmlTemplate) {
+    if (!jsCode) return;
+
+    elBrowserConsole.innerHTML = '';
+    appendBrowserLog('info', ['▶ Running…']);
+
+    // Escape </script> in user code so it doesn't break the srcdoc
+    const safeJs   = jsCode.replace(/<\/script>/gi, '<\\/script>');
+    const safeHtml = (htmlTemplate || '').replace(/<\/script>/gi, '<\\/script>');
+
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+
+    const srcdoc = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 14px; line-height: 1.5;
+    background: ${isDark ? '#111827' : '#ffffff'};
+    color: ${isDark ? '#f9fafb' : '#111'};
+  }
+  a { color: #6c8ef7; }
+  pre, code { font-family: 'JetBrains Mono', monospace; font-size: 13px; }
+</style>
+<script>
+/* ── Console bridge: pipe everything to parent via postMessage ─── */
+(function () {
+  var _send = function (level, args) {
+    var parts = Array.prototype.slice.call(args).map(function (a) {
+      if (a === null)      return 'null';
+      if (a === undefined) return 'undefined';
+      if (typeof a === 'object') {
+        try { return JSON.stringify(a, null, 2); } catch (e) { return String(a); }
+      }
+      return String(a);
+    });
+    window.parent.postMessage({ type: 'br-console', level: level, args: parts }, '*');
+  };
+  window.console = {
+    log:   function () { _send('log',   arguments); },
+    info:  function () { _send('info',  arguments); },
+    warn:  function () { _send('warn',  arguments); },
+    error: function () { _send('error', arguments); },
+    dir:   function () { _send('log',   arguments); },
+    table: function () { _send('log',   arguments); },
+    debug: function () { _send('log',   arguments); },
+    group: function () {}, groupEnd: function () {}, groupCollapsed: function () {},
+    time:  function () {}, timeEnd: function () {},
+    clear: function () { window.parent.postMessage({ type: 'br-clear' }, '*'); },
+  };
+  window.onerror = function (msg, src, line, col, err) {
+    window.parent.postMessage({ type: 'br-error', message: msg, line: line || 0 }, '*');
+    return false;
+  };
+  window.addEventListener('unhandledrejection', function (e) {
+    var msg = (e.reason && e.reason.message) ? e.reason.message : String(e.reason);
+    window.parent.postMessage({ type: 'br-error', message: 'Unhandled rejection: ' + msg, line: 0 }, '*');
+  });
+  /* Signal script-done after all microtasks have run */
+  document.addEventListener('DOMContentLoaded', function () {
+    Promise.resolve().then(function () {
+      window.parent.postMessage({ type: 'br-done' }, '*');
+    });
+  });
+})();
+<\/script>
+</head>
+<body>
+${safeHtml}
+<script>
+try {
+  ${safeJs}
+} catch (e) {
+  window.parent.postMessage({ type: 'br-error', message: e.message || String(e), line: 0 }, '*');
+}
+<\/script>
+</body>
+</html>`;
+
+    // Setting srcdoc reloads the iframe
+    elBrowserIframe.srcdoc = srcdoc;
+
+    // Pulse the address bar
+    if (elBrowserAddrBar) {
+        elBrowserAddrBar.textContent = 'sandbox://browser-run — running…';
+        setTimeout(() => {
+            if (elBrowserAddrBar) elBrowserAddrBar.textContent = 'sandbox://browser-run';
+        }, 800);
+    }
+}
+
+/** Receive postMessage events from the sandboxed iframe */
+window.addEventListener('message', (e) => {
+    if (!e.data || typeof e.data !== 'object') return;
+    switch (e.data.type) {
+        case 'br-console':
+            appendBrowserLog(e.data.level, e.data.args);
+            break;
+        case 'br-error':
+            appendBrowserLog('error', [
+                `${e.data.message}${e.data.line ? ' (line ' + e.data.line + ')' : ''}`
+            ]);
+            break;
+        case 'br-clear':
+            elBrowserConsole.innerHTML = '';
+            break;
+        case 'br-done':
+            appendBrowserLog('done', ['✔ Execution complete']);
+            break;
+    }
+});
+
+/**
+ * Append a styled line to the browser console panel.
+ * @param {'log'|'info'|'warn'|'error'|'done'} level
+ * @param {string[]} args
+ */
+function appendBrowserLog(level, args) {
+    const line = document.createElement('div');
+    line.className = `br-log br-log-${level}`;
+
+    const icon = document.createElement('span');
+    icon.className = 'br-log-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent =
+        level === 'error' ? '✖' :
+        level === 'warn'  ? '⚠' :
+        level === 'done'  ? '✔' : '›';
+
+    const text = document.createElement('span');
+    text.className = 'br-log-text';
+    text.textContent = args.join('  ');
+
+    line.appendChild(icon);
+    line.appendChild(text);
+    elBrowserConsole.appendChild(line);
+    elBrowserConsole.scrollTop = elBrowserConsole.scrollHeight;
+}
 
 /* ═══════════════════════════════════════════════════════════════
    7. VISUALIZER STATE HELPERS
@@ -223,13 +555,15 @@ function resetViz() {
     stopAutoPlay();
     disableStepControls();
     showEmptyState();
-    elStepsInfo.textContent = '— steps';
+    elStepsInfo.textContent      = '— steps';
     elCurrentLineNum.textContent = '—';
-    elStdoutPreview.textContent  = '';
-    elVizStdout.textContent      = '(no output)';
     elStepCounter.textContent    = '—';
     elProgressFill.style.width   = '0%';
     clearEditorHighlight();
+
+    // Reset browser panel
+    if (elBrowserIframe)  elBrowserIframe.srcdoc  = '';
+    if (elBrowserConsole) elBrowserConsole.innerHTML = '';
 }
 
 function enableStepControls() {
@@ -265,14 +599,20 @@ checkHealth();
 setInterval(checkHealth, HEALTH_PING_MS);
 
 /* ═══════════════════════════════════════════════════════════════
-   9. COMPILE BUTTON  (compile + run combined)
+   9. COMPILE / RUN BUTTON
    ═══════════════════════════════════════════════════════════════ */
 elBtnCompile.addEventListener('click', async () => {
     if (!editor) return;
     const code = editor.getValue().trim();
     if (!code) { setConsole('[ERROR] Code is empty.'); return; }
 
-    // Loading state
+    /* ── JS Browser Run mode: skip backend, run directly in iframe ── */
+    if (currentLang === 'javascript' && jsRunMode === 'browser') {
+        runInBrowser(code, elHtmlEditor ? elHtmlEditor.value : '');
+        return;
+    }
+
+    // ── Memory Trace mode: send to backend ───────────────────────
     elBtnCompile.disabled = true;
     elBtnCompile.classList.add('loading');
     disableStepControls();
@@ -285,7 +625,7 @@ elBtnCompile.addEventListener('click', async () => {
         const ctrl      = new AbortController();
         const timeoutId = setTimeout(() => ctrl.abort(), 180_000);
 
-        const response  = await fetch(API_ENDPOINT, {
+        const response = await fetch(API_ENDPOINT, {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify({ code, language: currentLang }),
@@ -299,7 +639,10 @@ elBtnCompile.addEventListener('click', async () => {
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
 
         if (data.success === false) {
-            let msg = `[${data.runtimeError === 'TimeoutError' ? 'TIMEOUT' : data.errors?.length ? 'COMPILE ERROR' : 'ERROR'}] ${data.message || 'Unknown error'}\n`;
+            let msg = `[${
+                data.runtimeError === 'TimeoutError' ? 'TIMEOUT' :
+                data.errors?.length ? 'COMPILE ERROR' : 'ERROR'
+            }] ${data.message || 'Unknown error'}\n`;
             if (data.errors?.length) {
                 data.errors.forEach(e => { msg += `  Line ${e.line}: ${e.message}\n`; });
             }
@@ -308,7 +651,6 @@ elBtnCompile.addEventListener('click', async () => {
             return;
         }
 
-        // Success
         executionSteps   = (data.steps || []).slice(0, MAX_STEPS);
         runtimeError     = data.runtimeError || null;
         currentStepIndex = 0;
@@ -357,7 +699,6 @@ function stepPrev() { if (currentStepIndex > 0) { currentStepIndex--; renderStep
 function stepNext() { if (currentStepIndex < executionSteps.length - 1) { currentStepIndex++; renderStep(); } }
 
 document.addEventListener('keydown', e => {
-    // Don't fire when editor or an input has focus
     if (editor && editor.hasTextFocus()) return;
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
     if (e.key === 'ArrowRight') { e.preventDefault(); stepNext(); }
@@ -391,44 +732,29 @@ function scheduleNextStep() {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   11. RENDER STEP
+   11. RENDER STEP  (no stdout strip — console is in left panel)
    ═══════════════════════════════════════════════════════════════ */
 function renderStep() {
     if (executionSteps.length === 0) return;
     const step = executionSteps[currentStepIndex];
 
-    // Toolbar controls state
     elBtnPrev.disabled = currentStepIndex === 0;
     elBtnNext.disabled = currentStepIndex === executionSteps.length - 1;
     elStepCounter.textContent = `${currentStepIndex + 1} / ${executionSteps.length}`;
 
-    // Progress bar
     const pct = executionSteps.length > 1
         ? (currentStepIndex / (executionSteps.length - 1)) * 100 : 100;
     elProgressFill.style.width = `${pct}%`;
 
-    // Toolbar info
     elCurrentLineNum.textContent = String(step.currentLine || '—');
 
-    // Stdout strip — show accumulated stdout up to this step
-    const stepOut = step.stdout || '';
-    elVizStdout.textContent = stepOut || '(no output yet)';
-    elVizStdout.scrollTop   = elVizStdout.scrollHeight;
-
-    // Stdout preview (last non-empty line)
-    const lastLine = stepOut.split('\n').filter(Boolean).pop() || '';
-    elStdoutPreview.textContent = lastLine ? `↳ ${lastLine}` : '';
-
-    // Render memory panels
     renderStack(step.stack || {});
     renderHeap(step.heap || {});
 
-    // Double rAF: arrows need the DOM painted first
     requestAnimationFrame(() =>
         requestAnimationFrame(() => drawArrows(step.stack || {}, step.heap || {}))
     );
 
-    // Highlight current line in editor
     highlightEditorLine(step.currentLine);
 }
 
@@ -562,7 +888,9 @@ function renderHeap(heap = {}) {
         header.appendChild(headerLeft);
         header.appendChild(idEl);
         header.addEventListener('click', () => {
-            collapsedHeapObjects.has(objId) ? collapsedHeapObjects.delete(objId) : collapsedHeapObjects.add(objId);
+            collapsedHeapObjects.has(objId)
+                ? collapsedHeapObjects.delete(objId)
+                : collapsedHeapObjects.add(objId);
             renderStep();
         });
         card.appendChild(header);
@@ -672,7 +1000,6 @@ function drawArrows(stackData, heapData) {
     });
 }
 
-// Redraw arrows on scroll / resize
 const redrawArrows = () => {
     if (executionSteps.length === 0) return;
     requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -683,7 +1010,11 @@ const redrawArrows = () => {
 
 elStackContainer.addEventListener('scroll', redrawArrows);
 elHeapContainer.addEventListener('scroll', redrawArrows);
-window.addEventListener('resize', redrawArrows);
+window.addEventListener('resize', () => {
+    redrawArrows();
+    // Re-position tab ink on resize
+    requestAnimationFrame(() => updateTabInk(jsRunMode));
+});
 
 /* ═══════════════════════════════════════════════════════════════
    15. UI HELPERS
